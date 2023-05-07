@@ -1,0 +1,17 @@
+-std=c++17
+-Wall
+-Wextra
+-Wno-unused-parameter
+-Wshadow
+-g3
+-DFMT_HEADER_ONLY
+-fsanitize=address
+-Iextern/mupdf/include
+-Iextern/spdlog/include
+-Iextern/fmt/include
+-Iextern/expected/include
+-Iextern/doctest
+-Lextern/mupdf/build/debug
+-lmupdf
+-lmupdf-third
+-lSDL2

@@ -1,0 +1,13 @@
+[submodule "extern/mupdf"]
+	path = extern/mupdf
+	url = git@github.com:ArtifexSoftware/mupdf.git
+	ignore = dirty
+[submodule "extern/spdlog"]
+	path = extern/spdlog
+	url = git@github.com:gabime/spdlog.git
+[submodule "extern/fmt"]
+	path = extern/fmt
+	url = git@github.com:fmtlib/fmt.git
+[submodule "extern/expected"]
+	path = extern/expected
+	url = git@github.com:TartanLlama/expected.git
