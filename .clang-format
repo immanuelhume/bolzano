@@ -6,3 +6,4 @@ ColumnLimit: 100
 
 AlignConsecutiveAssignments: true
 AlignConsecutiveDeclarations: true
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse

@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    window = SDL_CreateWindow("Bolzano", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 400, 800,
+    window = SDL_CreateWindow("Bolzano", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080,
                               SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (!window) {
         spdlog::error("Could not create SDL window: {}", SDL_GetError());
@@ -78,30 +78,40 @@ int main(int argc, char **argv) {
                 goto quit;
             } else if (e.type == SDL_TEXTINPUT) {
 #define INPUT(str) strcmp(e.text.text, str) == 0
-                if (INPUT("j")) {
+                if (INPUT("j")) { // scroll down
+                    spdlog::debug("{}", pos);
                     doc.scroll_y(pos, SCROLL_Y, VERTICAL_GAP);
-                } else if (INPUT("k")) {
+                } else if (INPUT("k")) { // scroll up
+                    spdlog::debug("{}", pos);
                     doc.scroll_y(pos, -SCROLL_Y, VERTICAL_GAP);
-                } else if (INPUT("l")) {
+                } else if (INPUT("l")) { // scroll right
                     doc.scroll_x(pos, SCROLL_X, HORIZONTAL_GAP);
-                } else if (INPUT("h")) {
+                } else if (INPUT("h")) { // scroll left
                     doc.scroll_x(pos, -SCROLL_X, HORIZONTAL_GAP);
-                } else if (INPUT("J")) {
-                    if (pos.pnum < doc.count_pages() - 1) {
-                        pos.pnum++;
-                        doc.try_centralize(pos, winw, winh);
-                    }
-                } else if (INPUT("K")) {
-                    if (pos.pnum > 0) {
-                        pos.pnum--;
-                        doc.try_centralize(pos, winw, winh);
-                    }
-                } else if (INPUT("+")) {
+                } else if (INPUT("J")) { // goto next page
+                    doc.skip_one(false, pos);
+                    doc.try_centralize(pos, winw, winh);
+                    spdlog::debug("{}", pos);
+                } else if (INPUT("K")) { // goto previous page
+                    doc.skip_one(true, pos);
+                    doc.try_centralize(pos, winw, winh);
+                    spdlog::debug("{}", pos);
+                } else if (INPUT("G")) { // @todo: goto bottom
+                } else if (INPUT("+")) { // zoom in
                     doc.scale_by(ZOOM_IN_FACTOR);
-                } else if (INPUT("-")) {
+                } else if (INPUT("-")) { // zoom out
                     doc.scale_by(ZOOM_OUT_FACTOR);
-                } else if (INPUT("q")) {
+                } else if (INPUT("q")) { // exit
                     goto quit;
+                } else if (INPUT("d")) { // toggle tiling mode
+                    switch (doc.tile_mode) {
+                    case TileMode::Single:
+                        doc.tile_mode = TileMode::Dual;
+                        break;
+                    case TileMode::Dual:
+                        doc.tile_mode = TileMode::Single;
+                        break;
+                    }
                 }
             }
         }
@@ -109,14 +119,12 @@ int main(int argc, char **argv) {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 1);
         SDL_RenderClear(renderer);
 
-        // spdlog::debug("Current position: page {} ({},{})", pos.pnum, pos.page_xoff,
-        // pos.page_yoff);
-
-        auto tiles = doc.tile1(winw, winh, pos, VERTICAL_GAP);
+        std::vector<PageRect> tiles = doc.tile(winw, winh, pos, VERTICAL_GAP, HORIZONTAL_GAP);
         for (const PageRect &tile : tiles) {
-            SDL_Rect     src_rect = sdl_from_fz_rect(tile.src);
-            SDL_Texture *tex      = doc.render(renderer, tile).value();
-            if (SDL_RenderCopy(renderer, tex, &src_rect, &tile.dst) < 0) {
+            SDL_Texture *tex = doc.render(renderer, tile).value();
+            SDL_Rect     src = tile.src.as_sdl_rect();
+            SDL_Rect     dst = tile.dst.as_sdl_rect();
+            if (SDL_RenderCopy(renderer, tex, &src, &dst) < 0) {
                 spdlog::error("Could not render tile: {}", SDL_GetError());
                 continue;
             }

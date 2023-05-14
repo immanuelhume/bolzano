@@ -2,4 +2,4 @@
 #include "doctest.h"
 
 // Include the files with tests here
-#include "main.hpp"
+#include "util.hpp"
