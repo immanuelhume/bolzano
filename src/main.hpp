@@ -1,10 +1,12 @@
 #pragma once
 
+#include "mupdf/fitz.h"
 #include "tl/expected.hpp"
 #include "util.hpp"
+#include <deque>
 #include <memory>
+#include <regex>
 #include <utility>
-#include <vector>
 
 class Page {
   public:
@@ -121,6 +123,7 @@ class Page {
                 spdlog::error("Page::render: Failed to create pixmap: {}", fz_caught_message(_ctx));
                 return tl::make_unexpected(BolzanoError{ErrSource::mupdf, fz_caught_message(_ctx)});
             }
+
             fz_try(_ctx) { fz_clear_pixmap_with_value(_ctx, pix, 0xFF); }
             fz_catch(_ctx) {
                 spdlog::error("Page::render: Failed to clear pixmap: {}", fz_caught_message(_ctx));
@@ -404,8 +407,8 @@ class Document {
         return;
     }
 
-    std::vector<PageRect> tile(float winw, float winh, const PositionTracker &pos, int ygap,
-                               int xgap) {
+    std::deque<PageRect> tile(float winw, float winh, const PositionTracker &pos, int ygap,
+                              int xgap) {
         switch (tile_mode) {
         case TileMode::Single:
             return tile1(winw, winh, pos, ygap);
@@ -484,6 +487,197 @@ class Document {
         }
     }
 
+    std::optional<std::tuple<int, float, float>>
+    map_to_page(const PositionTracker &pos, int x, int y, const std::deque<PageRect> &tiles) {
+        float dx = x - pos.scr_xoff;
+        float dy = y - pos.scr_yoff;
+
+        float px = pos.page_xoff + dx;
+        float py = pos.page_yoff + dy;
+
+        auto tile = std::find_if(tiles.begin(), tiles.end(),
+                                 [&pos](const PageRect &p) { return p.pnum == pos.pnum; });
+        if (tile == tiles.end()) return std::nullopt;
+
+        // Place "px" into its correct page
+        switch (tile_mode) {
+        case TileMode::Single:
+            if (px < 0 || px > width(tile->pnum)) return std::nullopt;
+            break;
+        case TileMode::Dual:
+            if (px < 0) {
+                if (tile->pnum % 2 == 0 || tile == tiles.begin()) return std::nullopt;
+                tile--;
+                px += width(tile->pnum);
+                if (px < 0) return std::nullopt;
+            } else if (px > width(tile->pnum)) {
+                if (tile->pnum % 2 == 1 || tile == tiles.end() - 1) return std::nullopt;
+                px -= width(tile->pnum);
+                tile++;
+                if (px > width(tile->pnum)) return std::nullopt;
+            }
+            break;
+        }
+
+        // Place "py" into its correct page
+        switch (tile_mode) {
+        case TileMode::Single:
+            while (py < 0) {
+                if (tile == tiles.begin()) return std::nullopt;
+                tile--;
+                py += height(tile->pnum);
+            }
+            while (py > height(tile->pnum)) {
+                if (tile == tiles.end() - 1) return std::nullopt;
+                py -= height(tile->pnum);
+                tile++;
+            }
+            break;
+        case TileMode::Dual:
+            while (py < 0) {
+                if (tile == tiles.begin() || tile == tiles.begin() + 1) return std::nullopt;
+                tile -= 2;
+                py += height(tile->pnum);
+            }
+            while (py > height(tile->pnum)) {
+                if (tile == tiles.end() - 2 || tile == tiles.end() - 1) return std::nullopt;
+                py -= height(tile->pnum);
+                tile += 2;
+            }
+            break;
+        }
+
+        // If we actually reach this line, then `tile` must be pointing at the page we want.
+        return {{tile->pnum, px, py}};
+    }
+
+    /**
+    Finds the best fz_stext_line which contains a given point.
+    */
+    fz_stext_line *best_text_line(int pnum, float x, float y) {
+        assert(pnum >= 0);
+        assert(pnum < _nr_pages);
+
+        x /= _scaling;
+        y /= _scaling;
+
+        fz_stext_line  *ret = nullptr;
+        fz_stext_block *blo = _stext_pages[pnum]->first_block;
+        fz_stext_line  *lin = nullptr;
+
+        while (true) {
+            if (is_inside(blo->bbox, x, y) && blo->type == 0) {
+                lin = blo->u.t.first_line;
+                while (true) {
+                    if (is_inside(lin->bbox, x, y)) {
+                        if (!ret) {
+                            ret = lin;
+                        } else {
+                            int dy0 = std::abs((ret->bbox.y1 + ret->bbox.y0) / 2 - y);
+                            int dy1 = std::abs((lin->bbox.y1 + lin->bbox.y0) / 2 - y);
+                            if (dy0 > dy1) ret = lin;
+                        }
+                    }
+                    if (lin == blo->u.t.last_line) break;
+                    lin = lin->next;
+                    continue;
+                }
+            }
+            if (blo == _stext_pages[pnum]->last_block) break;
+            blo = blo->next;
+        }
+
+        return ret;
+    }
+
+    FindRefResult find_ref(float x, fz_stext_line *line) {
+        x /= _scaling;
+
+        assert(line);
+        assert(line->bbox.x0 < x);
+        assert(x < line->bbox.x1);
+
+        const static std::regex                 REFNUM_PATTERN("(\\d+(.\\d+)*)");
+        const static std::array<std::string, 6> DOC_LABELS = {"theorem", "corollary",  "lemma",
+                                                              "example", "definition", "exercise"};
+
+        std::vector<int> chars;
+        int              idx_ctr = -1;
+
+        int idx = 0;
+
+        // First navigate to the character closest to our x coord
+        fz_stext_char *ch = line->first_char;
+        while (ch) {
+            chars.push_back(ch->c);
+            if (ch->quad.ul.x <= x && x <= ch->quad.ur.x) {
+                idx_ctr = idx;
+                break;
+            }
+            ch = ch->next;
+            idx++;
+        }
+        if (idx_ctr == -1) {
+            return {"", "", FindRefStatus::Invalid};
+        }
+
+        ch = ch->next;
+
+        // Continue searching right until the first whitespace
+        while (ch && ch->c != ' ') {
+            chars.push_back(ch->c);
+            ch = ch->next;
+        }
+
+        // Find the first index from the left of our cursor which is whitespace
+        int idx_left = idx_ctr - 1;
+        while (idx_left >= 0) {
+            if (chars[idx_left] == ' ') {
+                idx_left++; // move one right
+                break;
+            }
+            idx_left--;
+        }
+        idx_left = std::max(0, idx_left); // just in case it's negative
+
+        std::smatch refnum_match;
+        std::string refnum(chars.begin() + idx_left, chars.end());
+        if (std::regex_search(refnum, refnum_match, REFNUM_PATTERN)) {
+            refnum = refnum_match[1];
+        } else {
+            // If we can't find a reference number, then even if we find a label, there's no use.
+            return {"", "", FindRefStatus::Invalid};
+        }
+
+        // Now find the word before it, which should be the label, e.g. "theorem", "example"
+        int idx_label = idx_left - 2;
+        if (idx_label < 0) {
+            // This means that there isn't another word to the left of the refnum we found. So we
+            // signal to caller to check the previous line.
+            return {"", refnum, FindRefStatus::CheckPrev};
+        }
+        while (idx_label >= 0) {
+            if (chars[idx_label] == ' ') {
+                idx_label++; // move one right
+                break;
+            }
+            idx_label--;
+        }
+        idx_label = std::max(0, idx_label);
+
+        std::string label(chars.begin() + idx_label, chars.begin() + idx_left - 1);
+        std::transform(label.begin(), label.end(), label.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+
+        for (const std::string &l : DOC_LABELS) {
+            if (l == label) {
+                return {label, refnum, FindRefStatus::Ok};
+            }
+        }
+
+        return {"", refnum, FindRefStatus::RefnumOnly};
+    };
+
   private:
     /**
     Returns a list of pages and their rectangles which should appear, given some window dimensions
@@ -491,12 +685,12 @@ class Document {
 
     All computations are done post-scaled.
     */
-    std::vector<PageRect> tile1(float winw, float winh, const PositionTracker &pos, int gap) {
+    std::deque<PageRect> tile1(float winw, float winh, const PositionTracker &pos, int gap) {
         assert(pos.pnum >= 0);
         assert(pos.pnum < _nr_pages);
 
-        std::vector<PageRect> tiles;
-        Rect                  win_rect(0.0f, 0.0f, winw, winh);
+        std::deque<PageRect> tiles;
+        Rect                 win_rect(0.0f, 0.0f, winw, winh);
 
         // do the current page first
         auto [pw, ph] = page_dim(pos.pnum);
@@ -514,7 +708,7 @@ class Document {
             float page_xoff = xx * _pw;
 
             PositionTracker _pos{at_p, page_xoff, _ph, pos.scr_xoff, htop};
-            tiles.push_back(map_to_screen(_pos).bound_dst(win_rect));
+            tiles.push_front(map_to_screen(_pos).bound_dst(win_rect));
 
             htop -= ph;
             htop -= gap;
@@ -537,13 +731,13 @@ class Document {
         return tiles;
     }
 
-    std::vector<PageRect> tile2(float winw, float winh, const PositionTracker &pos, int ygap,
-                                int xgap) {
+    std::deque<PageRect> tile2(float winw, float winh, const PositionTracker &pos, int ygap,
+                               int xgap) {
         assert(pos.pnum >= 0);
         assert(pos.pnum < _nr_pages);
 
-        std::vector<PageRect> tiles;
-        Rect                  win_rect(0.0f, 0.0f, winw, winh);
+        std::deque<PageRect> tiles;
+        Rect                 win_rect(0.0f, 0.0f, winw, winh);
 
         // simple approach: draw pos.pnum first, and then check left or right
         PageRect init_tile = map_to_screen(pos);
@@ -577,7 +771,7 @@ class Document {
 
             PageRect tile = map_to_screen(p);
 
-            if (init_tile.dst.x0() > 0) tiles.push_back(tile.bound_dst(win_rect));
+            if (init_tile.dst.x0() > 0) tiles.push_front(tile.bound_dst(win_rect));
             xx     = p.page_xoff / pw;
             xx_scr = p.scr_xoff;
 
@@ -597,8 +791,8 @@ class Document {
             PositionTracker ri{at_p + 1, 0, height(at_p + 1), ltile.dst.x1() + xgap, htop};
             PageRect        rtile = map_to_screen(ri);
 
-            if (ltile.dst.x1() < winw) tiles.push_back(rtile.bound_dst(win_rect));
-            if (rtile.dst.x0() > 0) tiles.push_back(ltile.bound_dst(win_rect));
+            if (ltile.dst.x1() < winw) tiles.push_front(rtile.bound_dst(win_rect));
+            if (rtile.dst.x0() > 0) tiles.push_front(ltile.bound_dst(win_rect));
 
             htop -= std::max(ltile.dst.h(), rtile.dst.h()) + ygap;
             at_p -= 2;
@@ -617,8 +811,8 @@ class Document {
             PositionTracker ri{at_p + 1, 0, 0, ltile.dst.x1() + xgap, winh - hbot};
             PageRect        rtile = map_to_screen(ri);
 
-            if (ltile.dst.x1() < winw) tiles.push_back(rtile.bound_dst(win_rect));
             if (rtile.dst.x0() > 0) tiles.push_back(ltile.bound_dst(win_rect));
+            if (ltile.dst.x1() < winw) tiles.push_back(rtile.bound_dst(win_rect));
 
             hbot -= std::max(ltile.dst.h(), rtile.dst.h()) + ygap;
             at_p += 2;
@@ -628,8 +822,8 @@ class Document {
     }
 
     /**
-    Given some position and screen dimensions, tells you how to draw that page on the screen. The
-    resultant rectangles may overflow the window.
+    Given some position tells you how to draw that page on the screen. The resultant rectangles may
+    overflow the window.
 
     winw: (Virtual) window width.
 

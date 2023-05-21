@@ -127,7 +127,7 @@ template <typename K, typename V> class LruKv {
 
   private:
     /**
-    An O(n) search through the list of keys. For debugging.
+    A linear search through the list of keys. For debugging.
     */
     bool contains_key(const K &key) {
         for (const K &x : _xs) {
@@ -301,6 +301,10 @@ template <> struct fmt::formatter<Rect> {
     }
 };
 
+inline bool is_inside(fz_rect rect, float x, float y) {
+    return rect.x0 <= x && rect.x1 >= x && rect.y0 <= y && rect.y1 >= y;
+}
+
 inline bool are_rects_overlapping(Rect a, Rect b) {
     if (a.x1() <= b.x0() || b.x1() <= a.x0() || a.y1() <= b.y0() || b.y1() <= a.y0()) {
         return false;
@@ -464,3 +468,49 @@ TEST_CASE("rect_delta works") {
         CHECK(got.empty());
     }
 }
+
+enum class FindRefStatus : uint8_t {
+    Ok,         // found both label and refnum
+    Invalid,    // no refnum
+    RefnumOnly, // found a refnum, but no label
+    CheckPrev,  // found refnum, check previous line for label
+};
+
+struct FindRefResult {
+    std::string   label;
+    std::string   refnum;
+    FindRefStatus status;
+};
+
+template <> struct fmt::formatter<FindRefStatus> {
+    constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
+
+    template <typename FormatContext> auto format(const FindRefStatus &status, FormatContext &ctx) {
+        std::string_view statusStr;
+        switch (status) {
+        case FindRefStatus::Ok:
+            statusStr = "Ok";
+            break;
+        case FindRefStatus::Invalid:
+            statusStr = "Invalid";
+            break;
+        case FindRefStatus::RefnumOnly:
+            statusStr = "RefnumOnly";
+            break;
+        case FindRefStatus::CheckPrev:
+            statusStr = "CheckPrev";
+            break;
+        }
+        return format_to(ctx.out(), "{}", statusStr);
+    }
+};
+
+template <> struct fmt::formatter<FindRefResult> {
+    // The format specification for FindLabelResult
+    constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
+
+    template <typename FormatContext> auto format(const FindRefResult &result, FormatContext &ctx) {
+        return format_to(ctx.out(), "label: {}, refnum: {}, status: {}", result.label,
+                         result.refnum, result.status);
+    }
+};

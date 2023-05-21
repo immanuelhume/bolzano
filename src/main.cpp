@@ -54,8 +54,8 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    window = SDL_CreateWindow("Bolzano", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080,
-                              SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    window = SDL_CreateWindow("Bolzano", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920,
+                              1080, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (!window) {
         spdlog::error("Could not create SDL window: {}", SDL_GetError());
         return EXIT_FAILURE;
@@ -66,7 +66,8 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    PositionTracker pos{init_pnum, 0, 0, 0, 0};
+    PositionTracker      pos{init_pnum, 0, 0, 0, 0};
+    std::deque<PageRect> tiles;
 
     SDL_Event e;
     while (true) {
@@ -113,13 +114,31 @@ int main(int argc, char **argv) {
                         break;
                     }
                 }
+            } else if (e.type == SDL_MOUSEBUTTONDOWN) {
+                if (e.button.button == SDL_BUTTON_RIGHT) {
+                    spdlog::debug("Mouse click at ({}, {})", e.button.x, e.button.y);
+                    auto click = doc.map_to_page(pos, e.button.x, e.button.y, tiles);
+                    if (!click.has_value()) {
+                        spdlog::debug("Outside of any rendered page");
+                    } else {
+                        auto [pnum, px, py] = click.value();
+                        spdlog::debug("Clicked on page {} ({}, {})", pnum, px, py);
+                        auto l = doc.best_text_line(pnum, px, py);
+                        if (l) {
+                            auto ref = doc.find_ref(px, l);
+                            spdlog::debug("Reference is: {}", ref);
+                        } else {
+                            spdlog::debug("Did not click on a reference number");
+                        }
+                    }
+                }
             }
         }
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 1);
         SDL_RenderClear(renderer);
 
-        std::vector<PageRect> tiles = doc.tile(winw, winh, pos, VERTICAL_GAP, HORIZONTAL_GAP);
+        tiles = doc.tile(winw, winh, pos, VERTICAL_GAP, HORIZONTAL_GAP);
         for (const PageRect &tile : tiles) {
             SDL_Texture *tex = doc.render(renderer, tile).value();
             SDL_Rect     src = tile.src.as_sdl_rect();
