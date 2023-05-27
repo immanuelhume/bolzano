@@ -2,7 +2,7 @@ BasedOnStyle: LLVM
 Language: Cpp
 
 IndentWidth: 4
-ColumnLimit: 100
+ColumnLimit: 120
 
 AlignConsecutiveAssignments: true
 AlignConsecutiveDeclarations: true

@@ -16,9 +16,9 @@
 
 template <typename K, typename V> class LruKv {
 
-#define ASSERT_INVARIANTS                                                                          \
-    do {                                                                                           \
-        assert(_xs.size() == _hm.size());                                                          \
+#define ASSERT_INVARIANTS                                                                                              \
+    do {                                                                                                               \
+        assert(_xs.size() == _hm.size());                                                                              \
     } while (0);
 
   public:
@@ -160,8 +160,7 @@ struct BolzanoError {
 
 class PerfTimer {
   public:
-    PerfTimer(const std::string &_ident = "")
-        : ident(_ident), start(std::chrono::high_resolution_clock::now()) {}
+    PerfTimer(const std::string &_ident = "") : ident(_ident), start(std::chrono::high_resolution_clock::now()) {}
 
     ~PerfTimer() {
         auto stop     = std::chrono::high_resolution_clock::now();
@@ -180,16 +179,16 @@ inline std::pair<int, int> texture_size(SDL_Texture *texture) {
     return {w, h};
 }
 
-#define ASSERT_SDL_RECT(rect)                                                                      \
-    do {                                                                                           \
-        assert(rect.w > 0);                                                                        \
-        assert(rect.h > 0);                                                                        \
+#define ASSERT_SDL_RECT(rect)                                                                                          \
+    do {                                                                                                               \
+        assert(rect.w > 0);                                                                                            \
+        assert(rect.h > 0);                                                                                            \
     } while (0)
 
-#define ASSERT_FZ_RECT(rect)                                                                       \
-    do {                                                                                           \
-        assert(rect.x1 > rect.x0);                                                                 \
-        assert(rect.y1 > rect.y0);                                                                 \
+#define ASSERT_FZ_RECT(rect)                                                                                           \
+    do {                                                                                                               \
+        assert(rect.x1 > rect.x0);                                                                                     \
+        assert(rect.y1 > rect.y0);                                                                                     \
     } while (0)
 
 /**
@@ -242,13 +241,13 @@ class Rect {
 
     bool operator==(const Rect &other) const {
         constexpr float EPSILON = 1e-6f;
-        return std::fabs(_rect.x0 - other._rect.x0) < EPSILON &&
-               std::fabs(_rect.y0 - other._rect.y0) < EPSILON &&
-               std::fabs(_rect.x1 - other._rect.x1) < EPSILON &&
-               std::fabs(_rect.y1 - other._rect.y1) < EPSILON;
+        return std::fabs(_rect.x0 - other._rect.x0) < EPSILON && std::fabs(_rect.y0 - other._rect.y0) < EPSILON &&
+               std::fabs(_rect.x1 - other._rect.x1) < EPSILON && std::fabs(_rect.y1 - other._rect.y1) < EPSILON;
     }
 
     bool is_empty() { return _rect.x0 >= _rect.x1 || _rect.y0 >= _rect.y1; }
+
+    bool contains_point(float x, float y) { return _rect.x0 <= x && _rect.x1 >= x && _rect.y0 <= y && _rect.y1 >= y; }
 
     /**
     Returns a new rectangle such that it fits within another. Does not modify itself.
@@ -269,8 +268,7 @@ template <> struct fmt::formatter<fz_rect> {
     constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
 
     template <typename FormatContext> auto format(const fz_rect &rect, FormatContext &ctx) {
-        return format_to(ctx.out(), "fz_rect: x0={}, y0={}, x1={}, y1={}", rect.x0, rect.y0,
-                         rect.x1, rect.y1);
+        return format_to(ctx.out(), "fz_rect: x0={}, y0={}, x1={}, y1={}", rect.x0, rect.y0, rect.x1, rect.y1);
     }
 };
 
@@ -278,8 +276,7 @@ template <> struct fmt::formatter<fz_irect> {
     constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
 
     template <typename FormatContext> auto format(const fz_irect &rect, FormatContext &ctx) {
-        return format_to(ctx.out(), "fz_irect: x0={}, y0={}, x1={}, y1={}", rect.x0, rect.y0,
-                         rect.x1, rect.y1);
+        return format_to(ctx.out(), "fz_irect: x0={}, y0={}, x1={}, y1={}", rect.x0, rect.y0, rect.x1, rect.y1);
     }
 };
 
@@ -287,8 +284,7 @@ template <> struct fmt::formatter<SDL_Rect> {
     constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
 
     template <typename FormatContext> auto format(const SDL_Rect &rect, FormatContext &ctx) {
-        return format_to(ctx.out(), "SDL_Rect: x={}, y={}, w={}, h={}", rect.x, rect.y, rect.w,
-                         rect.h);
+        return format_to(ctx.out(), "SDL_Rect: x={}, y={}, w={}, h={}", rect.x, rect.y, rect.w, rect.h);
     }
 };
 
@@ -296,13 +292,16 @@ template <> struct fmt::formatter<Rect> {
     constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
 
     template <typename FormatContext> auto format(const Rect &rect, FormatContext &ctx) {
-        return format_to(ctx.out(), "Rect: x0={}, y0={}, x1={}, y1={}", rect.x0(), rect.y0(),
-                         rect.x1(), rect.y1());
+        return format_to(ctx.out(), "Rect: x0={}, y0={}, x1={}, y1={}", rect.x0(), rect.y0(), rect.x1(), rect.y1());
     }
 };
 
 inline bool is_inside(fz_rect rect, float x, float y) {
     return rect.x0 <= x && rect.x1 >= x && rect.y0 <= y && rect.y1 >= y;
+}
+
+inline bool is_inside(SDL_Rect rect, float x, float y) {
+    return rect.x <= x && rect.x + rect.w >= x && rect.y <= y && rect.y + rect.h >= y;
 }
 
 inline bool are_rects_overlapping(Rect a, Rect b) {
@@ -313,8 +312,7 @@ inline bool are_rects_overlapping(Rect a, Rect b) {
 }
 
 inline Rect get_bbox(Rect a, Rect b) {
-    return Rect(std::min(a.x0(), b.x0()), std::min(a.y0(), b.y0()), std::max(a.x1(), b.x1()),
-                std::max(a.y1(), b.y1()));
+    return Rect(std::min(a.x0(), b.x0()), std::min(a.y0(), b.y0()), std::max(a.x1(), b.x1()), std::max(a.y1(), b.y1()));
 }
 
 TEST_CASE("get_bbox works") {
@@ -506,11 +504,25 @@ template <> struct fmt::formatter<FindRefStatus> {
 };
 
 template <> struct fmt::formatter<FindRefResult> {
-    // The format specification for FindLabelResult
     constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
 
     template <typename FormatContext> auto format(const FindRefResult &result, FormatContext &ctx) {
-        return format_to(ctx.out(), "label: {}, refnum: {}, status: {}", result.label,
-                         result.refnum, result.status);
+        return format_to(ctx.out(), "label: {}, refnum: {}, status: {}", result.label, result.refnum, result.status);
+    }
+};
+
+template <> struct fmt::formatter<fz_point> {
+    constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
+
+    template <typename ParseContext> auto format(const fz_point &point, ParseContext &ctx) {
+        return fmt::format_to(ctx.out(), "({},{})", point.x, point.y);
+    }
+};
+
+template <> struct fmt::formatter<fz_quad> {
+    constexpr auto parse(format_parse_context &ctx) { return ctx.begin(); }
+
+    template <typename ParseContext> auto format(const fz_quad &quad, ParseContext &ctx) {
+        return fmt::format_to(ctx.out(), "ul: {}, ur: {}, ll: {}, lr: {}", quad.ul, quad.ur, quad.ll, quad.lr);
     }
 };

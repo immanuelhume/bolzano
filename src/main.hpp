@@ -3,6 +3,7 @@
 #include "mupdf/fitz.h"
 #include "tl/expected.hpp"
 #include "util.hpp"
+#include <algorithm>
 #include <deque>
 #include <memory>
 #include <regex>
@@ -68,15 +69,14 @@ class Page {
             page_rect   = Rect(tmp);
         }
         fz_catch(_ctx) {
-            spdlog::error("Page::init_texture: failed to get page bounds: {}",
-                          fz_caught_message(_ctx));
+            spdlog::error("Page::init_texture: failed to get page bounds: {}", fz_caught_message(_ctx));
             return tl::make_unexpected(BolzanoError{ErrSource::mupdf, fz_caught_message(_ctx)});
         }
 
         SDL_Rect tex_rect = page_rect.as_sdl_rect();
 
-        SDL_Texture *texture = SDL_CreateTexture(
-            renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, tex_rect.w, tex_rect.h);
+        SDL_Texture *texture =
+            SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, tex_rect.w, tex_rect.h);
         if (!texture) {
             spdlog::error("Page::init_texture: failed to create SDL texture: {}", SDL_GetError());
             return tl::make_unexpected(BolzanoError{ErrSource::sdl, SDL_GetError()});
@@ -115,10 +115,7 @@ class Page {
 
             fz_pixmap *pix = nullptr;
 
-            fz_try(_ctx) {
-                pix = fz_new_pixmap_with_bbox(_ctx, fz_device_rgb(_ctx), src_rect.as_fz_irect(),
-                                              _sep, 0);
-            }
+            fz_try(_ctx) { pix = fz_new_pixmap_with_bbox(_ctx, fz_device_rgb(_ctx), src_rect.as_fz_irect(), _sep, 0); }
             fz_catch(_ctx) {
                 spdlog::error("Page::render: Failed to create pixmap: {}", fz_caught_message(_ctx));
                 return tl::make_unexpected(BolzanoError{ErrSource::mupdf, fz_caught_message(_ctx)});
@@ -143,8 +140,7 @@ class Page {
                 draw_dev = fz_new_draw_device(_ctx, transform, pix);
                 // Here, we use the src_rect to clip out the part of the page we want
                 fz_run_display_list(_ctx, _dlist, draw_dev, fz_identity,
-                                    fz_transform_rect(src_rect.as_fz_rect(), inv_transform),
-                                    nullptr);
+                                    fz_transform_rect(src_rect.as_fz_rect(), inv_transform), nullptr);
                 fz_close_device(_ctx, draw_dev);
             }
             fz_always(_ctx) { fz_drop_device(_ctx, draw_dev); }
@@ -160,8 +156,7 @@ class Page {
 
             spdlog::debug("Locking texture at {}", dst);
 
-            if (SDL_LockTexture(_texture, &dst, reinterpret_cast<void **>(&pix_handle), &pitch) <
-                0) {
+            if (SDL_LockTexture(_texture, &dst, reinterpret_cast<void **>(&pix_handle), &pitch) < 0) {
                 fz_drop_pixmap(_ctx, pix); // drop the pixmap here! otherwise it'll leak
                 spdlog::error("While rendering page {}:", _pnum);
                 spdlog::error("Could not lock texture at {}: {}", (void *)_texture, SDL_GetError());
@@ -207,13 +202,16 @@ class Page {
 };
 
 /**
-Part of a page, and its translations into screen space.
+Part of a page, and its mappings into screen space.
 */
 struct PageRect {
     int  pnum;
     Rect src;
     Rect dst;
 
+    /**
+    Creates a new PageRect instance which completely fits within `oth`.
+    */
     PageRect bound_dst(const Rect &oth) {
         Rect new_dst = dst.bound(oth);
         Rect new_src(src.x0() + new_dst.x0() - dst.x0(),  //
@@ -225,10 +223,8 @@ struct PageRect {
 };
 
 template <> struct fmt::formatter<PageRect> {
-    // Presentation format: 'd' - default.
     char presentation = 'd';
 
-    // Parses format specifications of the form ['d'].
     constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
         auto it = ctx.begin(), end = ctx.end();
         if (it != end && *it == 'd') presentation = *it++;
@@ -237,16 +233,14 @@ template <> struct fmt::formatter<PageRect> {
         return it;
     }
 
-    // Formats the PageRect object `rect` using the parsed format specification (presentation).
     auto format(const PageRect &rect, format_context &ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "PageRect: pnum={}, src={}, dst={}", rect.pnum, rect.src,
-                              rect.dst);
+        return fmt::format_to(ctx.out(), "PageRect: pnum={}, src={}, dst={}", rect.pnum, rect.src, rect.dst);
     }
 };
 
 enum class TileMode : uint8_t {
-    Single,
-    Dual, // even pages on left
+    Single, // default single page scrolling
+    Dual,   // even pages on left
 };
 
 /**
@@ -261,10 +255,8 @@ struct PositionTracker {
 };
 
 template <> struct fmt::formatter<PositionTracker> {
-    // Presentation format: 'd' - default.
     char presentation = 'd';
 
-    // Parses format specifications of the form ['d'].
     constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
         auto it = ctx.begin(), end = ctx.end();
         if (it != end && *it == 'd') presentation = *it++;
@@ -273,13 +265,10 @@ template <> struct fmt::formatter<PositionTracker> {
         return it;
     }
 
-    // Formats the PositionTracker object `pos` using the parsed format specification
-    // (presentation).
     auto format(const PositionTracker &pos, format_context &ctx) const -> format_context::iterator {
-        return fmt::format_to(
-            ctx.out(),
-            "PositionTracker: pnum={}, page_xoff={}, page_yoff={}, scr_xoff={}, scr_yoff={}",
-            pos.pnum, pos.page_xoff, pos.page_yoff, pos.scr_xoff, pos.scr_yoff);
+        return fmt::format_to(ctx.out(),
+                              "PositionTracker: pnum={}, page_xoff={}, page_yoff={}, scr_xoff={}, scr_yoff={}",
+                              pos.pnum, pos.page_xoff, pos.page_yoff, pos.scr_xoff, pos.scr_yoff);
     }
 };
 
@@ -368,16 +357,10 @@ class Document {
 
         switch (tile_mode) {
         case TileMode::Single:
-            if (pos.page_yoff > ph && pos.pnum < _nr_pages - 1) { // scroll down into next page
-                pos.pnum++;
-                pos.page_yoff -= ph + gap;
-            } else if (pos.page_yoff < 0 && pos.pnum > 0) { // scroll up into prev page
-                pos.pnum--;
-                pos.page_yoff = height(pos.pnum) + pos.page_yoff + gap;
-            }
+            scroll_y_tile_single(pos, dy, gap);
             break;
         case TileMode::Dual:
-            // @todo: check of pos.pnum+-1 exist!
+            // @todo: check if pos.pnum+-1 exist!
             float oth_h = pos.pnum % 2 == 0 ? height(pos.pnum + 1) : height(pos.pnum - 1);
             if (pos.page_yoff > ph) {
                 if (oth_h <= ph) {
@@ -398,8 +381,19 @@ class Document {
         }
 
         // @todo: determine new x offset
-        // float new_w   = width(pos.pnum);
-        // pos.page_xoff = (pos.page_xoff / pw) * new_w;
+    }
+
+    void scroll_y_tile_single(PositionTracker &pos, int dy, int gap) {
+        pos.page_yoff += dy;
+        auto [_, ph] = page_dim(pos.pnum);
+
+        if (pos.page_yoff > ph && pos.pnum < _nr_pages - 1) { // scroll down into next page
+            pos.pnum++;
+            pos.page_yoff -= ph + gap;
+        } else if (pos.page_yoff < 0 && pos.pnum > 0) { // scroll up into prev page
+            pos.pnum--;
+            pos.page_yoff = height(pos.pnum) + pos.page_yoff + gap;
+        }
     }
 
     void scroll_x(PositionTracker &pos, int dx, int gap) {
@@ -407,8 +401,9 @@ class Document {
         return;
     }
 
-    std::deque<PageRect> tile(float winw, float winh, const PositionTracker &pos, int ygap,
-                              int xgap) {
+    float scaling() { return _scaling; }
+
+    std::deque<PageRect> tile(float winw, float winh, const PositionTracker &pos, int ygap, int xgap) {
         switch (tile_mode) {
         case TileMode::Single:
             return tile1(winw, winh, pos, ygap);
@@ -417,9 +412,140 @@ class Document {
         }
     }
 
+    std::deque<PageRect> tile1(float winw, float winh, const PositionTracker &pos, int gap) {
+        assert(pos.pnum >= 0);
+        assert(pos.pnum < _nr_pages);
+
+        std::deque<PageRect> tiles;
+        Rect                 win_rect(0.0f, 0.0f, winw, winh);
+
+        // do the current page first
+        auto [pw, ph] = page_dim(pos.pnum);
+        tiles.push_back(map_to_screen(pos).bound_dst(win_rect));
+
+        // The remaining heights on screen to fill, <= for both means that we're done.
+        float htop = pos.scr_yoff - pos.page_yoff - gap; // upwards
+        float hbot = winh - ph - htop - gap - gap;       // downwards
+
+        float xx = pos.page_xoff / pw;
+
+        int at_p = pos.pnum - 1;
+        while (htop > 0 && at_p >= 0) {
+            auto [_pw, _ph] = page_dim(at_p);
+            float page_xoff = xx * _pw;
+
+            PositionTracker _pos{at_p, page_xoff, _ph, pos.scr_xoff, htop};
+            tiles.push_front(map_to_screen(_pos).bound_dst(win_rect));
+
+            htop -= ph;
+            htop -= gap;
+            at_p--;
+        }
+
+        at_p = pos.pnum + 1;
+        while (hbot > 0 && at_p < _nr_pages) {
+            auto [_pw, _ph] = page_dim(at_p);
+            float page_xoff = xx * _pw;
+
+            PositionTracker _pos{at_p, page_xoff, 0.0, pos.scr_xoff, winh - hbot};
+            tiles.push_back(map_to_screen(_pos).bound_dst(win_rect));
+
+            hbot -= ph;
+            hbot -= gap;
+            at_p++;
+        }
+
+        return tiles;
+    }
+
+    std::deque<PageRect> tile2(float winw, float winh, const PositionTracker &pos, int ygap, int xgap) {
+        assert(pos.pnum >= 0);
+        assert(pos.pnum < _nr_pages);
+
+        std::deque<PageRect> tiles;
+        Rect                 win_rect(0.0f, 0.0f, winw, winh);
+
+        // simple approach: draw pos.pnum first, and then check left or right
+        PageRect init_tile = map_to_screen(pos);
+        tiles.push_back(init_tile.bound_dst(win_rect));
+
+        float xx     = pos.page_xoff / width(pos.pnum);
+        float xx_scr = pos.scr_xoff;
+
+        float htop = -1;
+        float hbot = -1;
+
+        float ratio_y = init_tile.src.y0() / height(pos.pnum);
+
+        if (pos.pnum % 2 == 0) { // need to draw right
+            // @todo: check if pnum + 1 exists
+            float           page_yoff = ratio_y * height(pos.pnum + 1);
+            PositionTracker p{pos.pnum + 1, 0, page_yoff, init_tile.dst.x1() + xgap, init_tile.dst.y0()};
+
+            PageRect tile = map_to_screen(p);
+            if (init_tile.dst.x1() < winw) tiles.push_back(tile.bound_dst(win_rect));
+
+            htop = std::min(init_tile.dst.y0(), tile.dst.y0()) - ygap;
+            hbot = winh - std::max(init_tile.dst.y1(), tile.dst.y1()) - ygap;
+        } else { // need to draw left
+            // @todo: check if pnum - 1 exists
+            float           pw        = width(pos.pnum - 1);
+            float           page_yoff = ratio_y * height(pos.pnum - 1);
+            PositionTracker p{pos.pnum - 1, pw, page_yoff, init_tile.dst.x0() - xgap, init_tile.dst.y0()};
+
+            PageRect tile = map_to_screen(p);
+
+            if (init_tile.dst.x0() > 0) tiles.push_front(tile.bound_dst(win_rect));
+            xx     = p.page_xoff / pw;
+            xx_scr = p.scr_xoff;
+
+            // @todo: this logic for getting the heights is duplicated!
+            htop = std::min(init_tile.dst.y0(), tile.dst.y0()) - ygap;
+            hbot = winh - std::max(init_tile.dst.y1(), tile.dst.y1()) - ygap;
+        }
+
+        int at_p = pos.pnum % 2 == 0 ? pos.pnum - 2 : pos.pnum - 3; // left side
+        while (at_p >= 0 && htop > 0) {                             // tile upwards
+            auto [lw, lh] = page_dim(at_p);
+            PositionTracker le{at_p, xx * lw, lh, xx_scr, htop};
+            PageRect        ltile = map_to_screen(le);
+
+            assert(at_p + 1 < _nr_pages);
+
+            PositionTracker ri{at_p + 1, 0, height(at_p + 1), ltile.dst.x1() + xgap, htop};
+            PageRect        rtile = map_to_screen(ri);
+
+            if (ltile.dst.x1() < winw) tiles.push_front(rtile.bound_dst(win_rect));
+            if (rtile.dst.x0() > 0) tiles.push_front(ltile.bound_dst(win_rect));
+
+            htop -= std::max(ltile.dst.h(), rtile.dst.h()) + ygap;
+            at_p -= 2;
+        }
+
+        at_p = pos.pnum % 2 == 0 ? pos.pnum + 2 : pos.pnum + 1; // left side
+        while (at_p < _nr_pages && hbot > 0) {                  // tile downwards
+            auto [lw, lh] = page_dim(at_p);
+            PositionTracker le{at_p, xx * lw, 0, xx_scr, winh - hbot};
+            PageRect        ltile = map_to_screen(le);
+
+            if (at_p + 1 >= _nr_pages) {
+                break;
+            }
+
+            PositionTracker ri{at_p + 1, 0, 0, ltile.dst.x1() + xgap, winh - hbot};
+            PageRect        rtile = map_to_screen(ri);
+
+            if (rtile.dst.x0() > 0) tiles.push_back(ltile.bound_dst(win_rect));
+            if (ltile.dst.x1() < winw) tiles.push_back(rtile.bound_dst(win_rect));
+
+            hbot -= std::max(ltile.dst.h(), rtile.dst.h()) + ygap;
+            at_p += 2;
+        }
+
+        return tiles;
+    }
+
     tl::expected<SDL_Texture *, BolzanoError> render(SDL_Renderer *renderer, const PageRect &tile) {
-        // spdlog::debug("Got request to render page {} with rect({}, {}, {}, {})", tile.pnum,
-        //               tile.src.x0, tile.src.y0, tile.src.x1, tile.src.y1);
         Page *p = _renders.get_or_insert(tile.pnum, [this, &tile, renderer]() {
             Page new_p(_ctx, tile.pnum, _dlists[tile.pnum], _separations[tile.pnum]);
             new_p.init_texture(renderer, _scaling);
@@ -432,16 +558,22 @@ class Document {
     Returns dimensions of some page w.r.t. the current scaling.
     */
     std::pair<float, float> page_dim(int pnum) {
+        auto [w, h] = page_dim_native(pnum);
+        return {_scaling * w, _scaling * h};
+    }
+
+    std::pair<float, float> page_dim_native(int pnum) {
         assert(pnum >= 0);
         assert(pnum < _nr_pages);
 
         fz_rect rect = fz_bound_display_list(_ctx, _dlists[pnum]);
-        return {_scaling * (rect.x1 - rect.x0), _scaling * (rect.y1 - rect.y0)};
+        return {rect.x1 - rect.x0, rect.y1 - rect.y0};
     }
 
     float width(int pnum) { return page_dim(pnum).first; }
-
+    float width_native(int pnum) { return page_dim_native(pnum).first; }
     float height(int pnum) { return page_dim(pnum).second; }
+    float height_native(int pnum) { return page_dim_native(pnum).second; }
 
     void scale_by(float factor) {
         if (factor == 1.0) {
@@ -487,16 +619,105 @@ class Document {
         }
     }
 
-    std::optional<std::tuple<int, float, float>>
-    map_to_page(const PositionTracker &pos, int x, int y, const std::deque<PageRect> &tiles) {
+    /**
+    For a given point in screen space, tries to see if it's refering to some reference. If so, finds the first
+    occurence of that reference.
+
+    winx, winy: screen space coordinates (presumably where the user clicked)
+
+    pos: current position
+
+    tiles: last rendered tiles
+    */
+    std::optional<std::tuple<int, float, float>> reference_at(int winx, int winy, const PositionTracker &pos,
+                                                              const std::deque<PageRect> &tiles) {
+        auto click = map_to_page(pos, winx, winy, tiles);
+
+        if (!click.has_value()) {
+            spdlog::debug("Outside of any rendered page");
+            return std::nullopt;
+        }
+
+        auto [pnum_clicked, px, py] = click.value();
+        spdlog::debug("Clicked on page {} ({}, {})", pnum_clicked, px, py);
+
+        auto l = best_text_line(pnum_clicked, px, py);
+
+        if (!l) {
+            spdlog::debug("Could not map point to any line of text");
+            return std::nullopt;
+        }
+
+        auto ref = find_ref_at(px, l);
+
+        switch (ref.status) {
+        case FindRefStatus::Ok: {
+            spdlog::debug("Found fully qualified reference: {}", ref);
+            std::string label_then_num = fmt::format(" {} {} ", ref.label, ref.refnum);
+            std::string num_then_label = fmt::format(" {} {} ", ref.refnum, ref.label);
+            auto        res            = first_of({label_then_num, num_then_label});
+            if (!res.has_value()) {
+                spdlog::error("could not find any of {} or {}", label_then_num, num_then_label);
+                break;
+            }
+            auto [pnum_res, quad] = res.value();
+            spdlog::info("found earliest reference on page {} at {}", pnum_res, quad);
+
+            float x_mid = (quad.ul.x + quad.ur.x) / 2;
+            float y_mid = (quad.ul.y + quad.ll.y) / 2;
+
+            return {{pnum_res, x_mid, y_mid}};
+        }
+        case FindRefStatus::Invalid:
+            spdlog::debug("Not a reference", ref);
+            break;
+        case FindRefStatus::RefnumOnly:
+            spdlog::debug("May be a reference number: {}", ref);
+            break;
+        case FindRefStatus::CheckPrev:
+            spdlog::debug("Should check previous line: {}", ref);
+            break;
+        }
+
+        return std::nullopt;
+    }
+
+  private:
+    /**
+    Given some position tells you how to draw that page on the screen. The resultant rectangles may
+    overflow the window.
+
+    winw: (Virtual) window width.
+
+    winh: (Virtual) window height.
+
+    pos: Some page-point to screen-point mapping.
+    */
+    PageRect map_to_screen(const PositionTracker &pos) {
+        assert(pos.pnum >= 0);
+        assert(pos.pnum < _nr_pages);
+
+        auto [pw, ph] = page_dim(pos.pnum);
+
+        Rect src(0.0f, 0.0f, pw, ph);
+        Rect dst(pos.scr_xoff - pos.page_xoff, pos.scr_yoff - pos.page_yoff, pos.scr_xoff + (pw - pos.page_xoff),
+                 pos.scr_yoff + (ph - pos.page_yoff));
+
+        return {pos.pnum, src, dst};
+    }
+
+    /**
+    x, y: screen space coordinates
+    */
+    std::optional<std::tuple<int, float, float>> map_to_page(const PositionTracker &pos, int x, int y,
+                                                             const std::deque<PageRect> &tiles) {
         float dx = x - pos.scr_xoff;
         float dy = y - pos.scr_yoff;
 
         float px = pos.page_xoff + dx;
         float py = pos.page_yoff + dy;
 
-        auto tile = std::find_if(tiles.begin(), tiles.end(),
-                                 [&pos](const PageRect &p) { return p.pnum == pos.pnum; });
+        auto tile = std::find_if(tiles.begin(), tiles.end(), [&pos](const PageRect &p) { return p.pnum == pos.pnum; });
         if (tile == tiles.end()) return std::nullopt;
 
         // Place "px" into its correct page
@@ -590,7 +811,7 @@ class Document {
         return ret;
     }
 
-    FindRefResult find_ref(float x, fz_stext_line *line) {
+    FindRefResult find_ref_at(float x, fz_stext_line *line) {
         x /= _scaling;
 
         assert(line);
@@ -666,8 +887,7 @@ class Document {
         idx_label = std::max(0, idx_label);
 
         std::string label(chars.begin() + idx_label, chars.begin() + idx_left - 1);
-        std::transform(label.begin(), label.end(), label.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+        std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c) { return std::tolower(c); });
 
         for (const std::string &l : DOC_LABELS) {
             if (l == label) {
@@ -678,170 +898,30 @@ class Document {
         return {"", refnum, FindRefStatus::RefnumOnly};
     };
 
-  private:
     /**
-    Returns a list of pages and their rectangles which should appear, given some window dimensions
-    and current position. The horizontal offset of each page will be based on the position given.
-
-    All computations are done post-scaled.
+    Searches for multiple strings within the document, and returns the first occuring result, if any.
     */
-    std::deque<PageRect> tile1(float winw, float winh, const PositionTracker &pos, int gap) {
-        assert(pos.pnum >= 0);
-        assert(pos.pnum < _nr_pages);
+    std::optional<std::pair<int, fz_quad>> first_of(const std::vector<std::string> &queries) {
+        for (int pnum = 0; pnum < _nr_pages; pnum++) {
+            std::vector<fz_quad> page_results; // @speed @memory: statically allocate this
 
-        std::deque<PageRect> tiles;
-        Rect                 win_rect(0.0f, 0.0f, winw, winh);
-
-        // do the current page first
-        auto [pw, ph] = page_dim(pos.pnum);
-        tiles.push_back(map_to_screen(pos).bound_dst(win_rect));
-
-        // The remaining heights on screen to fill, <= for both means that we're done.
-        float htop = pos.scr_yoff - pos.page_yoff - gap; // upwards
-        float hbot = winh - ph - htop - gap - gap;       // downwards
-
-        float xx = pos.page_xoff / pw;
-
-        int at_p = pos.pnum - 1;
-        while (htop > 0 && at_p >= 0) {
-            auto [_pw, _ph] = page_dim(at_p);
-            float page_xoff = xx * _pw;
-
-            PositionTracker _pos{at_p, page_xoff, _ph, pos.scr_xoff, htop};
-            tiles.push_front(map_to_screen(_pos).bound_dst(win_rect));
-
-            htop -= ph;
-            htop -= gap;
-            at_p--;
-        }
-
-        at_p = pos.pnum + 1;
-        while (hbot > 0 && at_p < _nr_pages) {
-            auto [_pw, _ph] = page_dim(at_p);
-            float page_xoff = xx * _pw;
-
-            PositionTracker _pos{at_p, page_xoff, 0.0, pos.scr_xoff, winh - hbot};
-            tiles.push_back(map_to_screen(_pos).bound_dst(win_rect));
-
-            hbot -= ph;
-            hbot -= gap;
-            at_p++;
-        }
-
-        return tiles;
-    }
-
-    std::deque<PageRect> tile2(float winw, float winh, const PositionTracker &pos, int ygap,
-                               int xgap) {
-        assert(pos.pnum >= 0);
-        assert(pos.pnum < _nr_pages);
-
-        std::deque<PageRect> tiles;
-        Rect                 win_rect(0.0f, 0.0f, winw, winh);
-
-        // simple approach: draw pos.pnum first, and then check left or right
-        PageRect init_tile = map_to_screen(pos);
-        tiles.push_back(init_tile.bound_dst(win_rect));
-
-        float xx     = pos.page_xoff / width(pos.pnum);
-        float xx_scr = pos.scr_xoff;
-
-        float htop = -1;
-        float hbot = -1;
-
-        float ratio_y = init_tile.src.y0() / height(pos.pnum);
-
-        if (pos.pnum % 2 == 0) { // need to draw right
-            // @todo: check if pnum + 1 exists
-            float           page_yoff = ratio_y * height(pos.pnum + 1);
-            PositionTracker p{pos.pnum + 1, 0, page_yoff, init_tile.dst.x1() + xgap,
-                              init_tile.dst.y0()};
-
-            PageRect tile = map_to_screen(p);
-            if (init_tile.dst.x1() < winw) tiles.push_back(tile.bound_dst(win_rect));
-
-            htop = std::min(init_tile.dst.y0(), tile.dst.y0()) - ygap;
-            hbot = winh - std::max(init_tile.dst.y1(), tile.dst.y1()) - ygap;
-        } else { // need to draw left
-            // @todo: check if pnum - 1 exists
-            float           pw        = width(pos.pnum - 1);
-            float           page_yoff = ratio_y * height(pos.pnum - 1);
-            PositionTracker p{pos.pnum - 1, pw, page_yoff, init_tile.dst.x0() - xgap,
-                              init_tile.dst.y0()};
-
-            PageRect tile = map_to_screen(p);
-
-            if (init_tile.dst.x0() > 0) tiles.push_front(tile.bound_dst(win_rect));
-            xx     = p.page_xoff / pw;
-            xx_scr = p.scr_xoff;
-
-            // @todo: this logic for getting the heights is duplicated!
-            htop = std::min(init_tile.dst.y0(), tile.dst.y0()) - ygap;
-            hbot = winh - std::max(init_tile.dst.y1(), tile.dst.y1()) - ygap;
-        }
-
-        int at_p = pos.pnum % 2 == 0 ? pos.pnum - 2 : pos.pnum - 3; // left side
-        while (at_p >= 0 && htop > 0) {                             // tile upwards
-            auto [lw, lh] = page_dim(at_p);
-            PositionTracker le{at_p, xx * lw, lh, xx_scr, htop};
-            PageRect        ltile = map_to_screen(le);
-
-            assert(at_p + 1 < _nr_pages);
-
-            PositionTracker ri{at_p + 1, 0, height(at_p + 1), ltile.dst.x1() + xgap, htop};
-            PageRect        rtile = map_to_screen(ri);
-
-            if (ltile.dst.x1() < winw) tiles.push_front(rtile.bound_dst(win_rect));
-            if (rtile.dst.x0() > 0) tiles.push_front(ltile.bound_dst(win_rect));
-
-            htop -= std::max(ltile.dst.h(), rtile.dst.h()) + ygap;
-            at_p -= 2;
-        }
-
-        at_p = pos.pnum % 2 == 0 ? pos.pnum + 2 : pos.pnum + 1; // left side
-        while (at_p < _nr_pages && hbot > 0) {                  // tile downwards
-            auto [lw, lh] = page_dim(at_p);
-            PositionTracker le{at_p, xx * lw, 0, xx_scr, winh - hbot};
-            PageRect        ltile = map_to_screen(le);
-
-            if (at_p + 1 >= _nr_pages) {
-                break;
+            for (const auto &query : queries) {
+                fz_quad result;
+                int     nr_results = fz_search_stext_page(_ctx, _stext_pages[pnum], query.data(), nullptr, &result, 1);
+                if (nr_results > 0) page_results.push_back(result);
             }
 
-            PositionTracker ri{at_p + 1, 0, 0, ltile.dst.x1() + xgap, winh - hbot};
-            PageRect        rtile = map_to_screen(ri);
+            if (page_results.empty()) continue;
 
-            if (rtile.dst.x0() > 0) tiles.push_back(ltile.bound_dst(win_rect));
-            if (ltile.dst.x1() < winw) tiles.push_back(rtile.bound_dst(win_rect));
+            fz_quad best = page_results[0];
+            for (const auto &quad : page_results) {
+                if (quad.ul.y < best.ul.y) best = quad;
+            }
 
-            hbot -= std::max(ltile.dst.h(), rtile.dst.h()) + ygap;
-            at_p += 2;
+            return {{pnum, best}};
         }
 
-        return tiles;
-    }
-
-    /**
-    Given some position tells you how to draw that page on the screen. The resultant rectangles may
-    overflow the window.
-
-    winw: (Virtual) window width.
-
-    winh: (Virtual) window height.
-
-    pos: Some page-point to screen-point mapping.
-    */
-    PageRect map_to_screen(const PositionTracker &pos) {
-        assert(pos.pnum >= 0);
-        assert(pos.pnum < _nr_pages);
-
-        auto [pw, ph] = page_dim(pos.pnum);
-
-        Rect src(0.0f, 0.0f, pw, ph);
-        Rect dst(pos.scr_xoff - pos.page_xoff, pos.scr_yoff - pos.page_yoff,
-                 pos.scr_xoff + (pw - pos.page_xoff), pos.scr_yoff + (ph - pos.page_yoff));
-
-        return {pos.pnum, src, dst};
+        return std::nullopt;
     }
 
   public:
