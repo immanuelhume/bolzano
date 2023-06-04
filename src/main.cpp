@@ -78,17 +78,36 @@ int main(int argc, char **argv) {
 
     int ok = 0; // just a store for error codes
 
+    bool is_panning = false;
+
     SDL_Event e;
     while (true) {
         int winw, winh;
         SDL_GetWindowSize(window, &winw, &winh);
 
-        int mousex, mousey;
-        SDL_GetMouseState(&mousex, &mousey);
+        int      mousex, mousey;
+        uint32_t mouse_state = SDL_GetMouseState(&mousex, &mousey);
 
         bool is_ref_viewport_focused = should_render_refs && is_inside(ref_viewport, mousex, mousey);
-
         std::optional<SDL_MouseButtonEvent> recalculate_ref = std::nullopt;
+
+        if (is_ref_viewport_focused) {
+            if (SDL_BUTTON(1) & mouse_state) {
+                if (!is_panning) {
+                    is_panning = true;
+                    SDL_GetRelativeMouseState(nullptr, nullptr);
+                } else {
+                    int dx, dy;
+                    SDL_GetRelativeMouseState(&dx, &dy);
+                    ref_pos.scr_xoff += dx;
+                    ref_pos.scr_yoff += dy;
+                    ref_viewport.x += dx;
+                    ref_viewport.y += dy;
+                }
+            } else {
+                if (is_panning) is_panning = false;
+            }
+        }
 
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) {
@@ -145,7 +164,7 @@ int main(int argc, char **argv) {
 
             } else if (e.type == SDL_MOUSEBUTTONDOWN) {
                 if (e.button.button == SDL_BUTTON_RIGHT) {
-                    spdlog::debug("Mouse click at ({}, {})", e.button.x, e.button.y);
+                    spdlog::debug("RMB at ({}, {})", e.button.x, e.button.y);
                     recalculate_ref = e.button;
                 }
 
@@ -183,6 +202,9 @@ int main(int argc, char **argv) {
                 spdlog::debug("Referenced position: page {} ({}, {})", std::get<0>(ref.value()),
                               std::get<1>(ref.value()), std::get<2>(ref.value()));
                 should_render_refs = true;
+
+                // Initialize the reference viewport
+                ref_viewport = {winw / 2 - cur_ref_winw / 2, winh / 2 - 512 / 2, cur_ref_winw, 512};
             } else {
                 spdlog::error("Could not find a valid reference");
                 should_render_refs = false;
@@ -190,13 +212,7 @@ int main(int argc, char **argv) {
         }
 
         if (should_render_refs) {
-            int ref_winw = cur_ref_winw;
-            int ref_winh = 512; // @todo: make this constant or configurable
-
-            // refresh_ref_pos();
             auto ref_tiles = doc.tile1(winw, winh, ref_pos, VERTICAL_GAP);
-
-            ref_viewport = {winw / 2 - ref_winw / 2, winh / 2 - ref_winh / 2, ref_winw, ref_winh};
 
             ok = SDL_RenderSetClipRect(renderer, &ref_viewport);
             if (ok < 0) spdlog::error("Could not set clip rectangle to draw reference viewport: {}", SDL_GetError());
