@@ -602,7 +602,7 @@ class Document {
     /**
     @todo: centralize horizontally also.
     */
-    void try_centralize(PositionTracker &pos, int winw, int winh) {
+    void try_centralize_y(PositionTracker &pos, int winh) {
         assert(pos.pnum >= 0);
         assert(pos.pnum < _nr_pages);
 
@@ -619,6 +619,15 @@ class Document {
         }
     }
 
+    void centralize_x(PositionTracker &pos, int winw) {
+        assert(pos.pnum >= 0);
+        assert(pos.pnum < _nr_pages);
+
+        float pw      = width(pos.pnum);
+        pos.page_xoff = pw / 2;
+        pos.scr_xoff  = winw / 2.0f;
+    }
+
     /**
     For a given point in screen space, tries to see if it's refering to some reference. If so, finds the first
     occurence of that reference.
@@ -629,8 +638,8 @@ class Document {
 
     tiles: last rendered tiles
     */
-    std::optional<std::tuple<int, float, float>> reference_at(int winx, int winy, const PositionTracker &pos,
-                                                              const std::deque<PageRect> &tiles) {
+    std::optional<std::tuple<int, float, float>>
+    reference_at(int winx, int winy, const PositionTracker &pos, const std::deque<PageRect> &tiles) {
         auto click = map_to_page(pos, winx, winy, tiles);
 
         if (!click.has_value()) {
@@ -709,8 +718,8 @@ class Document {
     /**
     x, y: screen space coordinates
     */
-    std::optional<std::tuple<int, float, float>> map_to_page(const PositionTracker &pos, int x, int y,
-                                                             const std::deque<PageRect> &tiles) {
+    std::optional<std::tuple<int, float, float>>
+    map_to_page(const PositionTracker &pos, int x, int y, const std::deque<PageRect> &tiles) {
         float dx = x - pos.scr_xoff;
         float dy = y - pos.scr_yoff;
 

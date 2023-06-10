@@ -3,7 +3,9 @@
 #include "doctest.h"
 #include "mupdf/fitz.h"
 #include "spdlog/spdlog.h"
+#include "tl/expected.hpp"
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -14,8 +16,16 @@
 #include <stdexcept>
 #include <unordered_map>
 
-template <typename K, typename V> class LruKv {
+const SDL_Color WHITE = {0xFF, 0xFF, 0xFF, 0xFF};
+const SDL_Color BLACK = {0x00, 0x00, 0x00, 0xFF};
 
+#define TRY_SDL(SDL_CALL)                                                                                              \
+    do {                                                                                                               \
+        auto _ok = SDL_CALL;                                                                                           \
+        if (_ok < 0) return tl::make_unexpected(BolzanoError{ErrSource::sdl, SDL_GetError()});                         \
+    } while (false)
+
+template <typename K, typename V> class LruKv {
 #define ASSERT_INVARIANTS                                                                                              \
     do {                                                                                                               \
         assert(_xs.size() == _hm.size());                                                                              \
@@ -525,4 +535,117 @@ template <> struct fmt::formatter<fz_quad> {
     template <typename ParseContext> auto format(const fz_quad &quad, ParseContext &ctx) {
         return fmt::format_to(ctx.out(), "ul: {}, ur: {}, ll: {}, lr: {}", quad.ul, quad.ur, quad.ll, quad.lr);
     }
+};
+
+class TextBlock {
+  public:
+    ~TextBlock() { SDL_DestroyTexture(_tex); }
+
+    void set_text(const std::string &text) {
+        if (text == _text) return;
+        _text     = text;
+        _is_dirty = true;
+    }
+
+    tl::expected<SDL_Texture *, BolzanoError>
+    render_if_updated(SDL_Renderer *renderer, TTF_Font *font, const SDL_Color &fg, const SDL_Color &bg) {
+        if (!_is_dirty) return _tex;
+
+        SDL_Surface *surface = TTF_RenderText_Shaded(font, _text.data(), fg, bg);
+        if (!surface) {
+            spdlog::error("TextBar: could not create surface for text");
+            tl::make_unexpected(BolzanoError{ErrSource::sdl, SDL_GetError()});
+        }
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
+        if (!tex) {
+            spdlog::error("TextBar: could not create texture from surface");
+            tl::make_unexpected(BolzanoError{ErrSource::sdl, SDL_GetError()});
+        }
+
+        if (_tex != nullptr) SDL_DestroyTexture(_tex);
+
+        _tex      = tex;
+        _is_dirty = false;
+
+        return tex;
+    }
+
+    bool is_dirty() const { return _is_dirty; }
+
+  private:
+    std::string  _text;
+    SDL_Texture *_tex      = nullptr;
+    bool         _is_dirty = true;
+};
+
+class TextBar {
+  public:
+    TextBar(TTF_Font *font) { _font = font; }
+    ~TextBar() { SDL_DestroyTexture(_tex); }
+
+    void set_left(const std::string &text) { _left.set_text(text); }
+    void set_right(const std::string &text) { _right.set_text(text); }
+
+    void set_width(int w) {
+        if (_w == w) return;
+        _w          = w;
+        _is_w_dirty = true;
+    }
+
+    tl::expected<SDL_Texture *, BolzanoError> get_texture(SDL_Renderer *renderer) {
+        if (!_left.is_dirty() && !_right.is_dirty() && !_is_w_dirty) {
+            assert(_tex != nullptr);
+            return _tex;
+        }
+
+        auto left = _left.render_if_updated(renderer, _font, WHITE, BLACK);
+        if (!left.has_value()) return left;
+        auto tex_left = left.value();
+
+        auto right = _right.render_if_updated(renderer, _font, WHITE, BLACK);
+        if (!right.has_value()) return right;
+        auto tex_right = right.value();
+
+        int w1, w2, h1, h2;
+        TRY_SDL(SDL_QueryTexture(tex_left, nullptr, nullptr, &w1, &h1));
+        TRY_SDL(SDL_QueryTexture(tex_right, nullptr, nullptr, &w2, &h2));
+
+        int bar_w = _w, bar_h = -1;
+        if (bar_w == -1) bar_w = w1 + w2;
+        if (bar_h != std::max(h1, h2)) bar_h = std::max(h1, h2);
+
+        assert(bar_w > 0);
+        if (_tex != nullptr) SDL_DestroyTexture(_tex);
+
+        SDL_Texture *tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, bar_w, bar_h);
+        if (!tex) return tl::make_unexpected(BolzanoError{ErrSource::sdl, SDL_GetError()});
+
+        TRY_SDL(SDL_SetRenderTarget(renderer, tex));
+
+        SDL_Rect src1{0, 0, w1, h1};
+        SDL_Rect dst1 = src1;
+
+        TRY_SDL(SDL_RenderCopy(renderer, tex_left, &src1, &dst1));
+
+        SDL_Rect src2{0, 0, w2, h2};
+        SDL_Rect dst2{bar_w - w2, 0, w2, h2};
+
+        TRY_SDL(SDL_RenderCopy(renderer, tex_right, &src2, &dst2));
+        TRY_SDL(SDL_SetRenderTarget(renderer, nullptr));
+
+        _is_w_dirty = false;
+        _tex        = tex;
+
+        return tex;
+    }
+
+  private:
+    TTF_Font    *_font = nullptr;
+    SDL_Texture *_tex  = nullptr;
+
+    int  _w          = -1;
+    bool _is_w_dirty = true;
+
+    TextBlock _left;
+    TextBlock _right;
 };

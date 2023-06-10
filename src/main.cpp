@@ -1,9 +1,9 @@
-#include <SDL2/SDL_render.h>
-#include <SDL2/SDL_surface.h>
 #define DOCTEST_CONFIG_DISABLE
 
 #include "main.hpp"
+#include "firamono_regular.hpp"
 #include "spdlog/cfg/env.h"
+#include <filesystem>
 #include <iostream>
 #include <unistd.h>
 
@@ -11,6 +11,8 @@ const int VERTICAL_GAP   = 1;
 const int HORIZONTAL_GAP = 1;
 const int SCROLL_Y       = 48;
 const int SCROLL_X       = 48;
+
+const int UI_FONT_SIZE = 20;
 
 const float ZOOM_IN_FACTOR  = 1.1;
 const float ZOOM_OUT_FACTOR = 0.9090909090909091;
@@ -66,6 +68,33 @@ int main(int argc, char **argv) {
         spdlog::error("Could not create SDL renderer: {}", SDL_GetError());
         return EXIT_FAILURE;
     }
+
+    if (SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND)) {
+        spdlog::error("Could not set blend mode for renderer: {}", SDL_GetError());
+        return EXIT_FAILURE;
+    }
+
+    if (TTF_Init() < 0) {
+        spdlog::error("Could not initialize TTF: {}", SDL_GetError());
+        return EXIT_FAILURE;
+    }
+
+    SDL_RWops *font_mem = SDL_RWFromConstMem(FiraMono_Regular_ttf, FiraMono_Regular_ttf_len);
+    if (!font_mem) {
+        spdlog::error("Could not load font: {}", SDL_GetError());
+        return EXIT_FAILURE;
+    }
+    TTF_Font *font = TTF_OpenFontRW(font_mem, 1, UI_FONT_SIZE);
+    if (!font) {
+        spdlog::error("Could not create font after loading it: {}", SDL_GetError());
+        return EXIT_FAILURE;
+    }
+
+    TextBar           text_bar(font);
+    const std::string filename_full    = std::filesystem::canonical(filename).string();
+    const std::string page_num_display = fmt::format("[{}/{}]", init_pnum, doc.count_pages());
+    text_bar.set_left(filename_full);
+    text_bar.set_right(page_num_display);
 
     PositionTracker      pos{init_pnum, 0, 0, 0, 0};
     std::deque<PageRect> tiles;
@@ -132,12 +161,12 @@ int main(int argc, char **argv) {
 
                 } else if (INPUT("J")) { // goto next page
                     doc.skip_one(false, pos);
-                    doc.try_centralize(pos, winw, winh);
+                    doc.try_centralize_y(pos, winh);
 
                     spdlog::debug("{}", pos);
                 } else if (INPUT("K")) { // goto previous page
                     doc.skip_one(true, pos);
-                    doc.try_centralize(pos, winw, winh);
+                    doc.try_centralize_y(pos, winh);
                     spdlog::debug("{}", pos);
 
                 } else if (INPUT("G")) { // @todo: goto bottom
@@ -198,6 +227,7 @@ int main(int argc, char **argv) {
                            static_cast<float>(winh) / 2};
                 // cur_ref      = ref_pos_new;
                 cur_ref_winw = doc.width(ref_pnum);
+                doc.centralize_x(ref_pos, winw);
 
                 spdlog::debug("Referenced position: page {} ({}, {})", std::get<0>(ref.value()),
                               std::get<1>(ref.value()), std::get<2>(ref.value()));
@@ -237,6 +267,25 @@ int main(int argc, char **argv) {
             ok = SDL_RenderDrawRect(renderer, &ref_viewport);
             if (ok < 0) spdlog::error("Could not draw rectangle around viewport: {}", SDL_GetError());
         }
+
+        text_bar.set_width(winw);
+        text_bar.set_right(fmt::format("[{}/{}]", pos.pnum, doc.count_pages()));
+        auto _bar = text_bar.get_texture(renderer);
+        if (!_bar.has_value()) {
+            spdlog::error(_bar.error().desc);
+            exit(EXIT_FAILURE);
+        }
+        SDL_Texture *bar_tex = _bar.value();
+        assert(bar_tex != nullptr);
+
+        int bar_w, bar_h;
+        ok = SDL_QueryTexture(bar_tex, nullptr, nullptr, &bar_w, &bar_h);
+        if (ok < 0) spdlog::error("Could not query texture for text bar", SDL_GetError());
+
+        SDL_Rect bar_src{0, 0, bar_w, bar_h};
+        SDL_Rect bar_dst{0, winh - bar_h, bar_w, bar_h};
+        SDL_RenderCopy(renderer, bar_tex, &bar_src, &bar_dst);
+        if (ok < 0) spdlog::error("Could not render text bar: {}", SDL_GetError());
 
         SDL_RenderPresent(renderer);
     }

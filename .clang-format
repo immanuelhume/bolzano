@@ -7,3 +7,5 @@ ColumnLimit: 120
 AlignConsecutiveAssignments: true
 AlignConsecutiveDeclarations: true
 AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+
+BinPackParameters: false

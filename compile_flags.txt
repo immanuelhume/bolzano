@@ -15,3 +15,4 @@
 -lmupdf
 -lmupdf-third
 -lSDL2
+-lSDL2_ttf
