@@ -1,3 +1,4 @@
+#include <SDL2/SDL_keycode.h>
 #include <SDL2/SDL_pixels.h>
 #define DOCTEST_CONFIG_DISABLE
 
@@ -108,7 +109,9 @@ int main(int argc, char **argv) {
 
     int ok = 0; // just a store for error codes
 
-    bool is_panning = false;
+    bool        is_panning   = false;
+    bool        is_searching = false;
+    std::string query_str    = "";
 
     SDL_Event e;
     while (true) {
@@ -143,58 +146,63 @@ int main(int argc, char **argv) {
             if (e.type == SDL_QUIT) {
                 goto quit;
             } else if (e.type == SDL_TEXTINPUT) {
+                if (is_searching) {
+                    query_str.append(e.text.text);
+                } else {
 #define INPUT(str) strcmp(e.text.text, str) == 0
-                if (INPUT("j")) { // scroll down
-                    if (!is_ref_viewport_focused) doc.scroll_y(pos, SCROLL_Y, VERTICAL_GAP);
-                    else doc.scroll_y_tile_single(ref_pos, SCROLL_Y, VERTICAL_GAP);
+                    if (INPUT("j")) { // scroll down
+                        if (!is_ref_viewport_focused) doc.scroll_y(pos, SCROLL_Y, VERTICAL_GAP);
+                        else doc.scroll_y_tile_single(ref_pos, SCROLL_Y, VERTICAL_GAP);
 
-                } else if (INPUT("k")) { // scroll up
-                    if (!is_ref_viewport_focused) doc.scroll_y(pos, -SCROLL_Y, VERTICAL_GAP);
-                    else doc.scroll_y_tile_single(ref_pos, -SCROLL_Y, VERTICAL_GAP);
+                    } else if (INPUT("k")) { // scroll up
+                        if (!is_ref_viewport_focused) doc.scroll_y(pos, -SCROLL_Y, VERTICAL_GAP);
+                        else doc.scroll_y_tile_single(ref_pos, -SCROLL_Y, VERTICAL_GAP);
 
-                } else if (INPUT("l")) { // scroll right
-                    if (!is_ref_viewport_focused) doc.scroll_x(pos, SCROLL_X, HORIZONTAL_GAP);
-                    else doc.scroll_x(ref_pos, SCROLL_X, HORIZONTAL_GAP);
+                    } else if (INPUT("l")) { // scroll right
+                        if (!is_ref_viewport_focused) doc.scroll_x(pos, SCROLL_X, HORIZONTAL_GAP);
+                        else doc.scroll_x(ref_pos, SCROLL_X, HORIZONTAL_GAP);
 
-                } else if (INPUT("h")) { // scroll left
-                    if (!is_ref_viewport_focused) doc.scroll_x(pos, -SCROLL_X, HORIZONTAL_GAP);
-                    else doc.scroll_x(ref_pos, -SCROLL_X, HORIZONTAL_GAP);
+                    } else if (INPUT("h")) { // scroll left
+                        if (!is_ref_viewport_focused) doc.scroll_x(pos, -SCROLL_X, HORIZONTAL_GAP);
+                        else doc.scroll_x(ref_pos, -SCROLL_X, HORIZONTAL_GAP);
 
-                } else if (INPUT("J")) { // goto next page
-                    doc.skip_one(false, pos);
-                    doc.try_centralize_y(pos, winh);
+                    } else if (INPUT("J")) { // goto next page
+                        doc.skip_one(false, pos);
+                        doc.try_centralize_y(pos, winh);
 
-                    spdlog::debug("{}", pos);
-                } else if (INPUT("K")) { // goto previous page
-                    doc.skip_one(true, pos);
-                    doc.try_centralize_y(pos, winh);
-                    spdlog::debug("{}", pos);
+                        spdlog::debug("{}", pos);
+                    } else if (INPUT("K")) { // goto previous page
+                        doc.skip_one(true, pos);
+                        doc.try_centralize_y(pos, winh);
+                        spdlog::debug("{}", pos);
 
-                } else if (INPUT("G")) { // @todo: goto bottom
+                    } else if (INPUT("G")) { // @todo: goto bottom
 
-                } else if (INPUT("+")) { // zoom in
-                    doc.scale_by(ZOOM_IN_FACTOR);
+                    } else if (INPUT("+")) { // zoom in
+                        doc.scale_by(ZOOM_IN_FACTOR);
 
-                } else if (INPUT("-")) { // zoom out
-                    doc.scale_by(ZOOM_OUT_FACTOR);
+                    } else if (INPUT("-")) { // zoom out
+                        doc.scale_by(ZOOM_OUT_FACTOR);
 
-                } else if (INPUT("=")) {
-                    doc.centralize_x(pos, winw);
+                    } else if (INPUT("=")) {
+                        doc.centralize_x(pos, winw);
 
-                } else if (INPUT("q")) { // exit
-                    goto quit;
+                    } else if (INPUT("q")) { // exit
+                        goto quit;
 
-                } else if (INPUT("d")) { // toggle tiling mode
-                    switch (doc.tile_mode) {
-                    case TileMode::Single:
-                        doc.tile_mode = TileMode::Dual;
-                        break;
-                    case TileMode::Dual:
-                        doc.tile_mode = TileMode::Single;
-                        break;
+                    } else if (INPUT("d")) { // toggle tiling mode
+                        switch (doc.tile_mode) {
+                        case TileMode::Single:
+                            doc.tile_mode = TileMode::Dual;
+                            break;
+                        case TileMode::Dual:
+                            doc.tile_mode = TileMode::Single;
+                            break;
+                        }
+                    } else if (INPUT("/")) { // start search
+                        is_searching = true;
                     }
                 }
-
             } else if (e.type == SDL_MOUSEBUTTONDOWN) {
                 if (e.button.button == SDL_BUTTON_RIGHT) {
                     spdlog::debug("RMB at ({}, {})", e.button.x, e.button.y);
@@ -204,6 +212,20 @@ int main(int argc, char **argv) {
             } else if (e.type == SDL_KEYDOWN) {
                 if (e.key.keysym.sym == SDLK_ESCAPE) {
                     if (should_render_refs) should_render_refs = false;
+                    if (is_searching) {
+                        query_str    = "";
+                        is_searching = false;
+                    }
+                } else if (e.key.keysym.sym == SDLK_RETURN) {
+                    if (is_searching) {
+                        // @todo: perform search
+                        query_str    = "";
+                        is_searching = false;
+                    }
+                } else if (e.key.keysym.sym == SDLK_BACKSPACE) {
+                    if (is_searching && !query_str.empty()) {
+                        query_str.pop_back();
+                    }
                 }
             }
         }
@@ -277,6 +299,11 @@ int main(int argc, char **argv) {
         text_bar.set_width(winw);
         // @speed: no need to format this on every loop
         text_bar.set_right(fmt::format("[{}/{}]", pos.pnum, doc.count_pages()));
+        if (is_searching) {
+            text_bar.set_left("search:" + query_str);
+        } else {
+            text_bar.set_left(filename_full);
+        }
         auto _bar = text_bar.get_texture(renderer);
         if (!_bar.has_value()) {
             spdlog::error(_bar.error().desc);
