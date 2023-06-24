@@ -1,7 +1,8 @@
+#include <SDL2/SDL_pixels.h>
 #define DOCTEST_CONFIG_DISABLE
 
-#include "main.hpp"
 #include "firamono_regular.hpp"
+#include "main.hpp"
 #include "spdlog/cfg/env.h"
 #include <filesystem>
 #include <iostream>
@@ -177,6 +178,9 @@ int main(int argc, char **argv) {
                 } else if (INPUT("-")) { // zoom out
                     doc.scale_by(ZOOM_OUT_FACTOR);
 
+                } else if (INPUT("=")) {
+                    doc.centralize_x(pos, winw);
+
                 } else if (INPUT("q")) { // exit
                     goto quit;
 
@@ -204,7 +208,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 1);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
         SDL_RenderClear(renderer);
 
         tiles = doc.tile(winw, winh, pos, VERTICAL_GAP, HORIZONTAL_GAP);
@@ -223,11 +227,12 @@ int main(int argc, char **argv) {
             auto ref = doc.reference_at(x, y, pos, tiles);
             if (ref.has_value()) {
                 auto [ref_pnum, ref_x, ref_y] = ref.value();
-                ref_pos = {ref_pnum, doc.scaling() * ref_x, doc.scaling() * ref_y, static_cast<float>(winw) / 2,
-                           static_cast<float>(winh) / 2};
-                // cur_ref      = ref_pos_new;
+                ref_pos      = {ref_pnum, doc.scaling() * ref_x, doc.scaling() * ref_y, static_cast<float>(winw) / 2,
+                                static_cast<float>(winh) / 2};
                 cur_ref_winw = doc.width(ref_pnum);
-                doc.centralize_x(ref_pos, winw);
+
+                // the reference viewport is always single tiled
+                doc.centralize_x_with_tile_mode(ref_pos, winw, TileMode::Single);
 
                 spdlog::debug("Referenced position: page {} ({}, {})", std::get<0>(ref.value()),
                               std::get<1>(ref.value()), std::get<2>(ref.value()));
@@ -247,6 +252,7 @@ int main(int argc, char **argv) {
             ok = SDL_RenderSetClipRect(renderer, &ref_viewport);
             if (ok < 0) spdlog::error("Could not set clip rectangle to draw reference viewport: {}", SDL_GetError());
 
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
             ok = SDL_RenderFillRect(renderer, &ref_viewport);
             if (ok < 0) spdlog::error("Could not clear viewport: {}", SDL_GetError());
 
@@ -269,6 +275,7 @@ int main(int argc, char **argv) {
         }
 
         text_bar.set_width(winw);
+        // @speed: no need to format this on every loop
         text_bar.set_right(fmt::format("[{}/{}]", pos.pnum, doc.count_pages()));
         auto _bar = text_bar.get_texture(renderer);
         if (!_bar.has_value()) {

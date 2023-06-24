@@ -352,7 +352,6 @@ class Document {
     int count_pages() { return _nr_pages; }
 
     void scroll_y(PositionTracker &pos, int dy, int gap) {
-        pos.page_yoff += dy;
         auto [pw, ph] = page_dim(pos.pnum);
 
         switch (tile_mode) {
@@ -360,6 +359,7 @@ class Document {
             scroll_y_tile_single(pos, dy, gap);
             break;
         case TileMode::Dual:
+            pos.page_yoff += dy;
             // @todo: check if pos.pnum+-1 exist!
             float oth_h = pos.pnum % 2 == 0 ? height(pos.pnum + 1) : height(pos.pnum - 1);
             if (pos.page_yoff > ph) {
@@ -619,14 +619,31 @@ class Document {
         }
     }
 
-    void centralize_x(PositionTracker &pos, int winw) {
+    void centralize_x_with_tile_mode(PositionTracker &pos, int winw, TileMode tile) {
         assert(pos.pnum >= 0);
         assert(pos.pnum < _nr_pages);
 
-        float pw      = width(pos.pnum);
-        pos.page_xoff = pw / 2;
-        pos.scr_xoff  = winw / 2.0f;
+        switch (tile) {
+
+        case TileMode::Single: {
+            float pw      = width(pos.pnum);
+            pos.page_xoff = pw / 2;
+            pos.scr_xoff  = winw / 2.0f;
+            break;
+        }
+        case TileMode::Dual: {
+            if (pos.pnum % 2 == 0) {
+                pos.page_xoff = width(pos.pnum);
+            } else {
+                pos.page_xoff = 0;
+            }
+            pos.scr_xoff = winw / 2.0f;
+            break;
+        }
+        }
     }
+
+    void centralize_x(PositionTracker &pos, int winw) { centralize_x_with_tile_mode(pos, winw, tile_mode); }
 
     /**
     For a given point in screen space, tries to see if it's refering to some reference. If so, finds the first
