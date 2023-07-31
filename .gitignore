@@ -1,3 +1,4 @@
+.vscode/
 build/
 perf.data*
 analysis.pdf
