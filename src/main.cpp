@@ -101,9 +101,9 @@ int main(int argc, char **argv) {
     PositionTracker      pos{init_pnum, 0, 0, 0, 0};
     std::deque<PageRect> tiles;
 
-    int             cur_ref_winw = -1;
-    SDL_Rect        ref_viewport;
-    PositionTracker ref_pos;
+    int  cur_ref_winw = -1;
+    auto ref_viewport = SDL_Rect{};
+    auto ref_pos      = PositionTracker{};
 
     bool should_render_refs = false;
 
@@ -112,6 +112,10 @@ int main(int argc, char **argv) {
     bool        is_panning   = false;
     bool        is_searching = false;
     std::string query_str    = "";
+
+    // @tmr: use this data structure mapping page -> list of hits
+    auto last_search_results      = std::vector<std::vector<fz_quad>>(doc.count_pages());
+    int  last_selected_search_idx = -1;
 
     SDL_Event e;
     while (true) {
@@ -218,7 +222,64 @@ int main(int argc, char **argv) {
                     }
                 } else if (e.key.keysym.sym == SDLK_RETURN) {
                     if (is_searching) {
-                        // @todo: perform search
+                        for (auto &res : last_search_results) {
+                            res.clear();
+                        }
+                        auto search_results = doc.search(query_str);
+
+                        // The behaviour in most PDF viewers seem to be: to scroll to the first occuring result from the
+                        // top of the window? We will approach this naively for now - determine the page and offset
+                        // which corresponds to the top of the window, and then iterate through search results to
+                        // determine the one to show.
+
+                        spdlog::debug("Got {} results for {}", search_results.size(), query_str);
+
+                        if (!search_results.empty()) {
+                            auto top_of_screen     = doc.map_to_page(pos, pos.scr_xoff, 0, tiles);
+                            auto [pnum_top, _, py] = top_of_screen.value();
+
+                            spdlog::debug("At page {}, top of screen corresponds to y offset of {}", pnum_top, py);
+
+                            auto idx           = 0ul;
+                            auto canTake       = false;
+                            auto selected_pnum = -1;
+                            auto selected_quad = fz_quad{};
+                            auto selected_idx  = -1;
+                            while (true) {
+                                auto [pnum, quad] = search_results[idx];
+                                canTake           = canTake || (pnum == pnum_top && quad.ul.y > py) || pnum > pnum_top;
+                                if (canTake) {
+                                    selected_pnum = pnum;
+                                    selected_quad = quad;
+                                    selected_idx  = idx;
+                                    break;
+                                }
+                                idx++;
+                                if (idx >= search_results.size()) {
+                                    canTake = true;
+                                    idx %= search_results.size();
+                                }
+                            }
+                            assert(selected_idx != -1);
+
+                            spdlog::debug("Nearest highlight is on {}, quad {}", selected_pnum, selected_quad);
+
+                            // Now that we have selected a page and a quad, let's jump to that place!
+                            pos = doc.ensure_visible(pos, selected_pnum, selected_quad.ul.x, selected_quad.ul.y, winw,
+                                                     winh);
+
+                            spdlog::debug("Will be moving to {}", pos);
+
+                            for (const auto &res : search_results) {
+                                auto [pnum, quad] = res;
+                                last_search_results[pnum].push_back(quad);
+                            }
+                        } else {
+                            last_search_results.clear();
+                            last_selected_search_idx = -1;
+                        }
+
+                        // @todo: do we want to keep the query string?
                         query_str    = "";
                         is_searching = false;
                     }
@@ -233,6 +294,12 @@ int main(int argc, char **argv) {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
         SDL_RenderClear(renderer);
 
+        // START DRAWING SHIT
+        //
+        // Now we finally start to draw stuff. We don't use the concept of pages when drawing. Instead, we just care
+        // about "tiles", and query the document for a bunch of tiles to draw given the current position, dimensions,
+        // etc. Each tile can be rendered to a texture and then copied to our SDL renderer.
+
         tiles = doc.tile(winw, winh, pos, VERTICAL_GAP, HORIZONTAL_GAP);
         for (const PageRect &tile : tiles) {
             SDL_Texture *tex = doc.render(renderer, tile).value();
@@ -243,6 +310,31 @@ int main(int argc, char **argv) {
                 continue;
             }
         }
+
+        // RENDER SEARCH HIGHLIGHT BOXES
+
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 64);
+
+        for (const auto &tile : tiles) {
+            auto &quads = last_search_results[tile.pnum];
+            for (const auto &quad : quads) {
+                if (!doc.can_see_quad(pos, tile.pnum, quad, winw, winh)) {
+                    continue;
+                }
+
+                auto highlight_rect = doc.map_to_screen(pos, tile.pnum, quad).as_sdl_rect();
+
+                ok = SDL_RenderFillRect(renderer, &highlight_rect);
+                if (ok < 0) {
+                    spdlog::error("Could not draw rectangle for highlighting: {}", SDL_GetError());
+                    continue;
+                }
+            }
+        }
+
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
+
+        // HANDLE VIRTUAL VIEWPORT FOR REFERENCES
 
         if (recalculate_ref.has_value()) {
             int  x = recalculate_ref.value().x, y = recalculate_ref.value().y;
@@ -296,6 +388,8 @@ int main(int argc, char **argv) {
             if (ok < 0) spdlog::error("Could not draw rectangle around viewport: {}", SDL_GetError());
         }
 
+        // HANDLE TEXT BAR
+
         text_bar.set_width(winw);
         // @speed: no need to format this on every loop
         text_bar.set_right(fmt::format("[{}/{}]", pos.pnum, doc.count_pages()));
@@ -320,6 +414,8 @@ int main(int argc, char **argv) {
         SDL_Rect bar_dst{0, winh - bar_h, bar_w, bar_h};
         SDL_RenderCopy(renderer, bar_tex, &bar_src, &bar_dst);
         if (ok < 0) spdlog::error("Could not render text bar: {}", SDL_GetError());
+
+        // END OF LOOP LOGIC
 
         SDL_RenderPresent(renderer);
     }

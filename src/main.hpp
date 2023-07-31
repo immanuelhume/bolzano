@@ -421,7 +421,7 @@ class Document {
 
         // do the current page first
         auto [pw, ph] = page_dim(pos.pnum);
-        tiles.push_back(map_to_screen(pos).bound_dst(win_rect));
+        tiles.push_back(pos_to_page_rect(pos).bound_dst(win_rect));
 
         // The remaining heights on screen to fill, <= for both means that we're done.
         float htop = pos.scr_yoff - pos.page_yoff - gap; // upwards
@@ -435,7 +435,7 @@ class Document {
             float page_xoff = xx * _pw;
 
             PositionTracker _pos{at_p, page_xoff, _ph, pos.scr_xoff, htop};
-            tiles.push_front(map_to_screen(_pos).bound_dst(win_rect));
+            tiles.push_front(pos_to_page_rect(_pos).bound_dst(win_rect));
 
             htop -= ph;
             htop -= gap;
@@ -448,7 +448,7 @@ class Document {
             float page_xoff = xx * _pw;
 
             PositionTracker _pos{at_p, page_xoff, 0.0, pos.scr_xoff, winh - hbot};
-            tiles.push_back(map_to_screen(_pos).bound_dst(win_rect));
+            tiles.push_back(pos_to_page_rect(_pos).bound_dst(win_rect));
 
             hbot -= ph;
             hbot -= gap;
@@ -466,7 +466,7 @@ class Document {
         Rect                 win_rect(0.0f, 0.0f, winw, winh);
 
         // simple approach: draw pos.pnum first, and then check left or right
-        PageRect init_tile = map_to_screen(pos);
+        PageRect init_tile = pos_to_page_rect(pos);
         tiles.push_back(init_tile.bound_dst(win_rect));
 
         float xx     = pos.page_xoff / width(pos.pnum);
@@ -482,7 +482,7 @@ class Document {
             float           page_yoff = ratio_y * height(pos.pnum + 1);
             PositionTracker p{pos.pnum + 1, 0, page_yoff, init_tile.dst.x1() + xgap, init_tile.dst.y0()};
 
-            PageRect tile = map_to_screen(p);
+            PageRect tile = pos_to_page_rect(p);
             if (init_tile.dst.x1() < winw) tiles.push_back(tile.bound_dst(win_rect));
 
             htop = std::min(init_tile.dst.y0(), tile.dst.y0()) - ygap;
@@ -493,7 +493,7 @@ class Document {
             float           page_yoff = ratio_y * height(pos.pnum - 1);
             PositionTracker p{pos.pnum - 1, pw, page_yoff, init_tile.dst.x0() - xgap, init_tile.dst.y0()};
 
-            PageRect tile = map_to_screen(p);
+            PageRect tile = pos_to_page_rect(p);
 
             if (init_tile.dst.x0() > 0) tiles.push_front(tile.bound_dst(win_rect));
             xx     = p.page_xoff / pw;
@@ -508,12 +508,12 @@ class Document {
         while (at_p >= 0 && htop > 0) {                             // tile upwards
             auto [lw, lh] = page_dim(at_p);
             PositionTracker le{at_p, xx * lw, lh, xx_scr, htop};
-            PageRect        ltile = map_to_screen(le);
+            PageRect        ltile = pos_to_page_rect(le);
 
             assert(at_p + 1 < _nr_pages);
 
             PositionTracker ri{at_p + 1, 0, height(at_p + 1), ltile.dst.x1() + xgap, htop};
-            PageRect        rtile = map_to_screen(ri);
+            PageRect        rtile = pos_to_page_rect(ri);
 
             if (ltile.dst.x1() < winw) tiles.push_front(rtile.bound_dst(win_rect));
             if (rtile.dst.x0() > 0) tiles.push_front(ltile.bound_dst(win_rect));
@@ -526,14 +526,14 @@ class Document {
         while (at_p < _nr_pages && hbot > 0) {                  // tile downwards
             auto [lw, lh] = page_dim(at_p);
             PositionTracker le{at_p, xx * lw, 0, xx_scr, winh - hbot};
-            PageRect        ltile = map_to_screen(le);
+            PageRect        ltile = pos_to_page_rect(le);
 
             if (at_p + 1 >= _nr_pages) {
                 break;
             }
 
             PositionTracker ri{at_p + 1, 0, 0, ltile.dst.x1() + xgap, winh - hbot};
-            PageRect        rtile = map_to_screen(ri);
+            PageRect        rtile = pos_to_page_rect(ri);
 
             if (rtile.dst.x0() > 0) tiles.push_back(ltile.bound_dst(win_rect));
             if (ltile.dst.x1() < winw) tiles.push_back(rtile.bound_dst(win_rect));
@@ -600,7 +600,8 @@ class Document {
     }
 
     /**
-    @todo: centralize horizontally also.
+    If an entire page fits within the height of the window, we centralize the page vertically. Otherwise, we'll flush
+    the page such that the top of the page aligns to the top of the window.
     */
     void try_centralize_y(PositionTracker &pos, int winh) {
         assert(pos.pnum >= 0);
@@ -708,18 +709,33 @@ class Document {
         return std::nullopt;
     }
 
-  private:
+    std::vector<std::pair<int, fz_quad>> search(const std::string &needle) {
+        const auto  MAX_NR_QUADS = 5000;
+        static auto quad_buf     = std::array<fz_quad, MAX_NR_QUADS>();
+
+        auto ret = std::vector<std::pair<int, fz_quad>>();
+
+        for (auto i = 0; i < _nr_pages; i++) {
+            auto stext_page = _stext_pages[i];
+            auto n = fz_search_stext_page(_ctx, stext_page, needle.data(), nullptr, quad_buf.data(), MAX_NR_QUADS);
+            assert(n <= MAX_NR_QUADS);
+            for (auto j = 0; j < n; j++) {
+                // @todo: this relies on scaling too? what if the scale changes later between calls to this function?
+                auto quad = fz_transform_quad(quad_buf[j], fz_scale(_scaling, _scaling));
+                ret.push_back({i, quad});
+            }
+        }
+
+        return ret;
+    }
+
     /**
     Given some position tells you how to draw that page on the screen. The resultant rectangles may
     overflow the window.
 
-    winw: (Virtual) window width.
-
-    winh: (Virtual) window height.
-
     pos: Some page-point to screen-point mapping.
     */
-    PageRect map_to_screen(const PositionTracker &pos) {
+    PageRect pos_to_page_rect(const PositionTracker &pos) {
         assert(pos.pnum >= 0);
         assert(pos.pnum < _nr_pages);
 
@@ -734,6 +750,10 @@ class Document {
 
     /**
     x, y: screen space coordinates
+
+    Returns a tuple of (page number, x, y).
+
+    @todo: must we account for gaps?
     */
     std::optional<std::tuple<int, float, float>>
     map_to_page(const PositionTracker &pos, int x, int y, const std::deque<PageRect> &tiles) {
@@ -798,6 +818,121 @@ class Document {
         return {{tile->pnum, px, py}};
     }
 
+    /**
+
+    @todo: account for gaps also!
+    */
+    std::pair<float, float>
+    map_to_screen(const PositionTracker &cur_pos, const int pnum, const float x, const float y) {
+        switch (tile_mode) {
+        case TileMode::Single: {
+            // A simple approach: figure out "how far" the point is from the current position, vertically and
+            // horizontally, then add that difference to the current position's screen coordinates.
+
+            if (pnum == cur_pos.pnum) {
+                auto scr_x = cur_pos.scr_xoff + x - cur_pos.page_xoff;
+                auto scr_y = cur_pos.scr_yoff + y - cur_pos.page_yoff;
+                return {scr_x, scr_y};
+            } else {
+                auto d_page = pnum < cur_pos.pnum ? -1 : 1;
+
+                auto dy   = cur_pos.page_yoff;
+                auto at_p = cur_pos.pnum + d_page;
+
+                while (at_p != pnum) {
+                    dy += height(at_p);
+                    at_p += d_page;
+                }
+                dy += height(pnum) - y;
+
+                auto scr_y = cur_pos.scr_yoff - d_page * dy;
+                auto scr_x = cur_pos.scr_xoff + x - cur_pos.page_xoff;
+
+                return {scr_x, scr_y};
+            }
+        }
+        case TileMode::Dual:
+            assert(false); // unimplemented
+            break;
+        }
+    }
+
+    std::pair<float, float> map_to_screen(const PositionTracker &cur_pos, const int pnum, const fz_point p) {
+        return map_to_screen(cur_pos, pnum, p.x, p.y);
+    }
+
+    /**
+    Maps a quad to a rectangle on the screen.
+    */
+    Rect map_to_screen(const PositionTracker &cur_pos, const int pnum, const fz_quad quad) {
+        auto [x0, x1] = map_to_screen(cur_pos, pnum, quad.ul);
+        auto [y0, y1] = map_to_screen(cur_pos, pnum, quad.lr);
+        return Rect(x0, x1, y0, y1);
+    }
+
+    /**
+    Ensures that a page-point is visible in the window. Will jump forward/backwards as necessary. If the point is
+    already visible, then nothing happens.
+    */
+    PositionTracker ensure_visible(const PositionTracker &cur_pos,
+                                   const int              target_pnum,
+                                   const float            target_x,
+                                   const float            target_y,
+                                   const float            winw,
+                                   const float            winh) {
+        if (can_see_point(cur_pos, target_pnum, target_x, target_y, winw, winh)) {
+            return cur_pos;
+        }
+        auto ret = PositionTracker{};
+        ret.pnum = target_pnum;
+
+        switch (tile_mode) {
+        case TileMode::Single:
+            ret.scr_xoff  = winw / 2;
+            ret.scr_yoff  = winh / 2;
+            ret.page_xoff = target_x;
+            ret.page_yoff = target_y;
+            return ret;
+        case TileMode::Dual:
+            assert(false); // unimplemented
+            break;
+        }
+    }
+
+    /**
+    Checks, given a current position, window dimentions, and a page-point of interest, whether that page point can be
+    seen in the window.
+    */
+    bool can_see_point(const PositionTracker &cur_pos,
+                       const int              target_pnum,
+                       const float            target_x,
+                       const float            target_y,
+                       const float            winw,
+                       const float            winh) {
+        auto [x, y] = map_to_screen(cur_pos, target_pnum, target_x, target_y);
+        return x >= 0 && y >= 0 && x <= winw && y <= winh;
+    }
+
+    bool can_see_point(const PositionTracker &cur_pos,
+                       const int              target_pnum,
+                       const fz_point         point,
+                       const float            winw,
+                       const float            winh) {
+        return can_see_point(cur_pos, target_pnum, point.x, point.y, winw, winh);
+    }
+
+    bool can_see_quad(const PositionTracker &cur_pos,
+                      const int              target_pnum,
+                      const fz_quad         &quad,
+                      const float            winw,
+                      const float            winh) {
+        return can_see_point(cur_pos, target_pnum, quad.ul, winw, winh) ||
+               can_see_point(cur_pos, target_pnum, quad.ur, winw, winh) ||
+               can_see_point(cur_pos, target_pnum, quad.ll, winw, winh) ||
+               can_see_point(cur_pos, target_pnum, quad.lr, winw, winh);
+    }
+
+  private:
     /**
     Finds the best fz_stext_line which contains a given point.
     */
