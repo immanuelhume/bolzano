@@ -368,21 +368,38 @@ int main(int argc, char **argv) {
 
         SDL_SetRenderDrawColor(renderer, 255, 255, 0, 64);
 
+        auto [cur_pnum, cur_idx] = last_selected_search;
         if (are_searches_highlighted) {
             for (const auto &tile : tiles) {
-                auto &quads = last_search_results[tile.pnum];
-                for (const auto &quad : quads) {
+                const auto &quads = last_search_results[tile.pnum];
+                for (int i = 0; i < (int)quads.size(); i++) {
+                    auto quad = quads[i];
+
                     if (!doc.can_see_quad(pos, tile.pnum, quad, winw, winh)) {
                         continue;
                     }
 
                     auto highlight_rect = doc.map_to_screen(pos, tile.pnum, quad).as_sdl_rect();
 
+                    bool is_selected = tile.pnum == cur_pnum && i == cur_idx;
+                    if (is_selected) {
+                        SDL_SetRenderDrawColor(renderer, 64, 255, 180, 64);
+                    }
+
                     ok = SDL_RenderFillRect(renderer, &highlight_rect);
                     if (ok < 0) {
                         spdlog::error("Could not draw rectangle for highlighting: {}", SDL_GetError());
                         continue;
                     }
+
+                    SDL_SetRenderDrawColor(renderer, 128, 128, 128, 128);
+                    ok = SDL_RenderDrawRect(renderer, &highlight_rect);
+                    if (ok < 0) {
+                        spdlog::error("Could not draw rectangle border for highlighting: {}", SDL_GetError());
+                        continue;
+                    }
+
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 0, 64);
                 }
             }
         }
