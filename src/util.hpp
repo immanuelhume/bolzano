@@ -649,3 +649,8 @@ class TextBar {
     TextBlock _left;
     TextBlock _right;
 };
+
+inline bool operator==(const fz_quad &lhs, const fz_quad &rhs) {
+    return lhs.ul.x == rhs.ul.x && lhs.ul.y == rhs.ul.y && lhs.ur.x == rhs.ur.x && lhs.ur.y == rhs.ur.y &&
+           lhs.ll.x == rhs.ll.x && lhs.ll.y == rhs.ll.y && lhs.lr.x == rhs.lr.x && lhs.lr.y == rhs.lr.y;
+}

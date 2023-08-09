@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
     std::string query_str    = "";
 
     auto last_search_results      = std::vector<std::vector<fz_quad>>(doc.count_pages());
-    int  last_selected_search_idx = -1;
+    auto last_selected_search     = std::pair<int, int>(-1, -1); // page, index
     bool are_searches_highlighted = false;
 
     SDL_Event e;
@@ -216,6 +216,44 @@ int main(int argc, char **argv) {
                         }
                     } else if (INPUT("/")) { // start search
                         is_searching = true;
+                    } else if (INPUT("n")) {
+                        if (are_searches_highlighted) {
+                            // we want to jump to the next search
+                            auto [last_pnum, last_idx] = last_selected_search;
+                            // check the current page first, then check the remaining pages, else pick the first result
+                            int selected_pnum = -1;
+                            int selected_idx  = -1;
+                            if (last_idx + 1 < (int)last_search_results[last_pnum].size()) {
+                                selected_pnum = last_pnum;
+                                selected_idx  = last_idx + 1;
+                            } else {
+                                for (int pnum = last_pnum + 1; pnum < doc.count_pages(); pnum++) {
+                                    if (!last_search_results[pnum].empty()) {
+                                        selected_pnum = pnum;
+                                        selected_idx  = 0;
+                                        break;
+                                    }
+                                }
+                                if (selected_pnum == -1) {
+                                    for (int pnum = 0; pnum < doc.count_pages(); pnum++) {
+                                        if (!last_search_results[pnum].empty()) {
+                                            selected_pnum = pnum;
+                                            selected_idx  = 0;
+                                        }
+                                    }
+                                }
+                            }
+
+                            assert(selected_pnum != -1);
+                            assert(selected_idx != -1);
+
+                            last_selected_search = {selected_pnum, selected_idx};
+
+                            spdlog::debug("selected page {} index {}", selected_pnum, selected_idx);
+
+                            auto quad = last_search_results[selected_pnum][selected_idx];
+                            pos       = doc.ensure_visible(pos, selected_pnum, quad.ul.x, quad.ul.y, winw, winh);
+                        }
                     }
                 }
             } else if (e.type == SDL_MOUSEBUTTONDOWN) {
@@ -236,6 +274,8 @@ int main(int argc, char **argv) {
                         for (auto &res : last_search_results) {
                             res.clear();
                         }
+                        last_selected_search = {-1, -1};
+
                         auto search_results = doc.search(query_str);
 
                         // The behaviour in most PDF viewers seem to be: to scroll to the first occuring result from the
@@ -283,6 +323,9 @@ int main(int argc, char **argv) {
 
                             for (const auto &res : search_results) {
                                 auto [pnum, quad] = res;
+                                if (pnum == selected_pnum && quad == selected_quad) {
+                                    last_selected_search = {pnum, last_search_results[pnum].size()};
+                                }
                                 last_search_results[pnum].push_back(quad);
                             }
 
