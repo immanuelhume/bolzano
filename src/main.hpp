@@ -709,6 +709,9 @@ class Document {
         return std::nullopt;
     }
 
+    /**
+    Returns scaled quads to the current scaling.
+    */
     std::vector<std::pair<int, fz_quad>> search(const std::string &needle) {
         const auto  MAX_NR_QUADS = 5000;
         static auto quad_buf     = std::array<fz_quad, MAX_NR_QUADS>();

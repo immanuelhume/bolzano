@@ -113,9 +113,9 @@ int main(int argc, char **argv) {
     bool        is_searching = false;
     std::string query_str    = "";
 
-    // @tmr: use this data structure mapping page -> list of hits
     auto last_search_results      = std::vector<std::vector<fz_quad>>(doc.count_pages());
     int  last_selected_search_idx = -1;
+    bool are_searches_highlighted = false;
 
     SDL_Event e;
     while (true) {
@@ -184,10 +184,21 @@ int main(int argc, char **argv) {
 
                     } else if (INPUT("+")) { // zoom in
                         doc.scale_by(ZOOM_IN_FACTOR);
+                        auto scale_mat = fz_scale(ZOOM_IN_FACTOR, ZOOM_IN_FACTOR);
+                        for (auto &quads : last_search_results) {
+                            for (auto &quad : quads) {
+                                quad = fz_transform_quad(quad, scale_mat);
+                            }
+                        }
 
                     } else if (INPUT("-")) { // zoom out
                         doc.scale_by(ZOOM_OUT_FACTOR);
-
+                        auto scale_mat = fz_scale(ZOOM_OUT_FACTOR, ZOOM_OUT_FACTOR);
+                        for (auto &quads : last_search_results) {
+                            for (auto &quad : quads) {
+                                quad = fz_transform_quad(quad, scale_mat);
+                            }
+                        }
                     } else if (INPUT("=")) {
                         doc.centralize_x(pos, winw);
 
@@ -274,9 +285,8 @@ int main(int argc, char **argv) {
                                 auto [pnum, quad] = res;
                                 last_search_results[pnum].push_back(quad);
                             }
-                        } else {
-                            last_search_results.clear();
-                            last_selected_search_idx = -1;
+
+                            are_searches_highlighted = true;
                         }
 
                         // @todo: do we want to keep the query string?
@@ -315,19 +325,21 @@ int main(int argc, char **argv) {
 
         SDL_SetRenderDrawColor(renderer, 255, 255, 0, 64);
 
-        for (const auto &tile : tiles) {
-            auto &quads = last_search_results[tile.pnum];
-            for (const auto &quad : quads) {
-                if (!doc.can_see_quad(pos, tile.pnum, quad, winw, winh)) {
-                    continue;
-                }
+        if (are_searches_highlighted) {
+            for (const auto &tile : tiles) {
+                auto &quads = last_search_results[tile.pnum];
+                for (const auto &quad : quads) {
+                    if (!doc.can_see_quad(pos, tile.pnum, quad, winw, winh)) {
+                        continue;
+                    }
 
-                auto highlight_rect = doc.map_to_screen(pos, tile.pnum, quad).as_sdl_rect();
+                    auto highlight_rect = doc.map_to_screen(pos, tile.pnum, quad).as_sdl_rect();
 
-                ok = SDL_RenderFillRect(renderer, &highlight_rect);
-                if (ok < 0) {
-                    spdlog::error("Could not draw rectangle for highlighting: {}", SDL_GetError());
-                    continue;
+                    ok = SDL_RenderFillRect(renderer, &highlight_rect);
+                    if (ok < 0) {
+                        spdlog::error("Could not draw rectangle for highlighting: {}", SDL_GetError());
+                        continue;
+                    }
                 }
             }
         }
